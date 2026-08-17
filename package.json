@@ -3,7 +3,7 @@
   "publisher": "aitostack",
   "displayName": "Azure DevOps PRs (MCP)",
   "description": "Expose Azure DevOps pull requests to coding agents through MCP",
-  "version": "0.0.43",
+  "version": "0.0.44",
   "icon": "resources/marketplace-icon.png",
   "license": "MIT",
   "repository": {

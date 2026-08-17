@@ -3,7 +3,7 @@ import { App, applyDocumentTheme, applyHostStyleVariables } from '@modelcontextp
 import { marked } from 'marked';
 import { renderPullRequestReview } from './pull-request-review-ui';
 
-const app = new App({ name: 'Azure DevOps pull request review', version: '0.0.43' }, {});
+const app = new App({ name: 'Azure DevOps pull request review', version: '0.0.44' }, {});
 const root = document.createElement('main');
 root.className = 'review-card';
 document.body.append(root);
