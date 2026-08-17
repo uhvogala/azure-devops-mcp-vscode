@@ -1,0 +1,128 @@
+{
+  "name": "azure-devops-mcp",
+  "publisher": "local",
+  "displayName": "Azure DevOps MCP",
+  "description": "Expose Azure DevOps pull requests to coding agents through MCP",
+  "version": "0.0.31",
+  "engines": {
+    "vscode": "^1.125.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "azure-devops-mcp.signIn",
+        "title": "Sign In to Azure DevOps",
+        "category": "Azure DevOps MCP"
+      },
+      {
+        "command": "azure-devops-mcp.replyToPullRequestComment",
+        "title": "Reply to Azure DevOps Thread",
+        "category": "Azure DevOps MCP"
+      },
+      {
+        "command": "azure-devops-mcp.addPullRequestComment",
+        "title": "Add Azure DevOps Comment",
+        "category": "Azure DevOps MCP",
+        "icon": "$(comment-add)"
+      },
+      {
+        "command": "azure-devops-mcp.openLocalPullRequestFile",
+        "title": "Open Local File",
+        "category": "Azure DevOps MCP",
+        "icon": "$(go-to-file)"
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "azure-devops-mcp.pull-requests",
+        "label": "Azure DevOps pull requests"
+      }
+    ],
+    "menus": {
+      "comments/commentThread/title": [
+        {
+          "command": "azure-devops-mcp.replyToPullRequestComment",
+          "when": "commentThread =~ /azure-devops-thread/",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "azure-devops-mcp.addPullRequestComment",
+          "when": "azureDevOpsMcpPrDocument",
+          "group": "navigation"
+        },
+        {
+          "command": "azure-devops-mcp.openLocalPullRequestFile",
+          "when": "azureDevOpsMcpPrDocument",
+          "group": "navigation"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "azure-devops-mcp.addPullRequestComment",
+          "when": "azureDevOpsMcpPrDocument",
+          "group": "1_modification"
+        },
+        {
+          "command": "azure-devops-mcp.openLocalPullRequestFile",
+          "when": "azureDevOpsMcpPrDocument",
+          "group": "3_open"
+        }
+      ],
+      "editor/lineNumber/context": [
+        {
+          "command": "azure-devops-mcp.addPullRequestComment",
+          "when": "azureDevOpsMcpPrDocument",
+          "group": "1_modification"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "bash scripts/with-system-ca.sh vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "@types/vscode": "^1.125.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.5.0",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6",
+    "uuid": "^11.1.1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "azure-devops-node-api": "^15.1.2",
+    "dompurify": "^3.4.13",
+    "marked": "^17.0.6",
+    "zod": "^4.4.3"
+  }
+}
