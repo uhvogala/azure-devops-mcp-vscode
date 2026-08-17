@@ -8,10 +8,10 @@ import {
 } from '../extension';
 
 
-suite('Azure DevOps MCP extension', () => {
+suite('Azure DevOps PRs (MCP) extension', () => {
 	test('activates and registers its commands', async () => {
-		const extension = vscode.extensions.getExtension('local.azure-devops-mcp');
-		assert.ok(extension, 'Azure DevOps MCP extension should be available');
+		const extension = vscode.extensions.getExtension('local.azure-devops-prs-mcp');
+		assert.ok(extension, 'Azure DevOps PRs (MCP) extension should be available');
 
 		await extension.activate();
 		const commands = await vscode.commands.getCommands(true);
@@ -20,6 +20,8 @@ suite('Azure DevOps MCP extension', () => {
 		assert.ok(commands.includes('azure-devops-mcp.replyToPullRequestComment'));
 		assert.ok(commands.includes('azure-devops-mcp.addPullRequestComment'));
 		assert.ok(commands.includes('azure-devops-mcp.openLocalPullRequestFile'));
+		assert.ok(commands.includes('azure-devops-mcp.refreshOverview'));
+		assert.ok(commands.includes('azure-devops-mcp.selectOverviewRepository'));
 	});
 
 	test('forwards checkout and reviewed-file actions with their full card parameters', async () => {

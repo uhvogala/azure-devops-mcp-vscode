@@ -1,9 +1,10 @@
 {
-  "name": "azure-devops-mcp",
+  "name": "azure-devops-prs-mcp",
   "publisher": "local",
-  "displayName": "Azure DevOps MCP",
+  "displayName": "Azure DevOps PRs (MCP)",
   "description": "Expose Azure DevOps pull requests to coding agents through MCP",
-  "version": "0.0.31",
+  "version": "0.0.42",
+  "icon": "resources/marketplace-icon.png",
   "engines": {
     "vscode": "^1.125.0"
   },
@@ -15,28 +16,62 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "azure-devops-mcp-views",
+          "title": "Azure DevOps PRs (MCP)",
+          "icon": "resources/activitybar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "azure-devops-mcp-views": [
+        {
+          "id": "azure-devops-mcp.pullRequests",
+          "name": "Pull Requests"
+        },
+        {
+          "id": "azure-devops-mcp.review",
+          "name": "Pull Request Review",
+          "type": "webview"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "azure-devops-mcp.signIn",
         "title": "Sign In to Azure DevOps",
-        "category": "Azure DevOps MCP"
+        "category": "Azure DevOps PRs (MCP)"
       },
       {
         "command": "azure-devops-mcp.replyToPullRequestComment",
         "title": "Reply to Azure DevOps Thread",
-        "category": "Azure DevOps MCP"
+        "category": "Azure DevOps PRs (MCP)"
       },
       {
         "command": "azure-devops-mcp.addPullRequestComment",
         "title": "Add Azure DevOps Comment",
-        "category": "Azure DevOps MCP",
+        "category": "Azure DevOps PRs (MCP)",
         "icon": "$(comment-add)"
       },
       {
         "command": "azure-devops-mcp.openLocalPullRequestFile",
         "title": "Open Local File",
-        "category": "Azure DevOps MCP",
+        "category": "Azure DevOps PRs (MCP)",
         "icon": "$(go-to-file)"
+      },
+      {
+        "command": "azure-devops-mcp.refreshOverview",
+        "title": "Refresh Pull Requests",
+        "category": "Azure DevOps PRs (MCP)",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "azure-devops-mcp.selectOverviewRepository",
+        "title": "Select Pull Request Repository",
+        "category": "Azure DevOps PRs (MCP)",
+        "icon": "$(repo)"
       }
     ],
     "mcpServerDefinitionProviders": [
@@ -82,6 +117,18 @@
           "command": "azure-devops-mcp.addPullRequestComment",
           "when": "azureDevOpsMcpPrDocument",
           "group": "1_modification"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "azure-devops-mcp.refreshOverview",
+          "when": "view == azure-devops-mcp.pullRequests",
+          "group": "navigation"
+        },
+        {
+          "command": "azure-devops-mcp.selectOverviewRepository",
+          "when": "view == azure-devops-mcp.pullRequests",
+          "group": "navigation"
         }
       ]
     }

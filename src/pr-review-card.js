@@ -1,8 +1,9 @@
 import DOMPurify from 'dompurify';
 import { App, applyDocumentTheme, applyHostStyleVariables } from '@modelcontextprotocol/ext-apps';
 import { marked } from 'marked';
+import { renderPullRequestReview } from './pull-request-review-ui';
 
-const app = new App({ name: 'Azure DevOps pull request review', version: '0.0.31' }, {});
+const app = new App({ name: 'Azure DevOps pull request review', version: '0.0.42' }, {});
 const root = document.createElement('main');
 root.className = 'review-card';
 document.body.append(root);
@@ -219,7 +220,7 @@ function renderPullRequestDraft(draft) {
 	root.append(header, branches, description, files, draftDetails);
 }
 
-function renderReview(review) {
+function renderReviewLegacy(review) {
 	root.replaceChildren();
 
 	const header = element('header', 'header');
@@ -502,6 +503,13 @@ function renderReview(review) {
 
 function labelForBranch(branch, review) {
 	return branch === review.sourceRef ? 'Checkout source' : 'Checkout target';
+}
+
+function renderReview(review) {
+	renderPullRequestReview(root, review, request => app.callServerTool({
+		name: request.name,
+		arguments: request.arguments,
+	}));
 }
 
 app.ontoolresult = result => {

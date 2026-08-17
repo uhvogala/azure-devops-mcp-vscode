@@ -5,6 +5,7 @@ import {
 	CommentThreadStatus,
 	GitPullRequestCommentThread,
 	GitVersionType,
+	PullRequestStatus,
 	VersionControlChangeType,
 } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'node:http';
@@ -13,6 +14,7 @@ import { basename } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AzureDevOpsAuthentication } from './authentication';
+import { loadPullRequestReview } from './pull-request-review';
 
 const providerId = 'azure-devops-mcp.pull-requests';
 const pullRequestContentScheme = 'azure-devops-pr';
@@ -20,7 +22,105 @@ const openPullRequestFileDiffCommand = 'azure-devops-mcp.openPullRequestFileDiff
 const replyToPullRequestCommentCommand = 'azure-devops-mcp.replyToPullRequestComment';
 const addPullRequestCommentCommand = 'azure-devops-mcp.addPullRequestComment';
 const openLocalPullRequestFileCommand = 'azure-devops-mcp.openLocalPullRequestFile';
+const pullRequestsViewId = 'azure-devops-mcp.pullRequests';
+const reviewViewId = 'azure-devops-mcp.review';
+const refreshOverviewCommand = 'azure-devops-mcp.refreshOverview';
+const selectOverviewRepositoryCommand = 'azure-devops-mcp.selectOverviewRepository';
 const execFileAsync = promisify(execFile);
+
+interface WorkspaceRepository {
+	organization: string;
+	project: string;
+	repository: string;
+}
+
+interface OverviewPullRequest {
+	id: number;
+	title: string;
+	sourceRef: string;
+	targetRef: string;
+}
+
+function repositoryFromRemote(remote: string): WorkspaceRepository | undefined {
+	const match = remote.match(/^https:\/\/(?:[^@/]+@)?dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/]+?)(?:\.git)?$/)
+		?? remote.match(/^https:\/\/([^/.]+)\.visualstudio\.com\/([^/]+)\/_git\/([^/]+?)(?:\.git)?$/)
+		?? remote.match(/^git@ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?$/)
+		?? remote.match(/^ssh:\/\/git@ssh\.dev\.azure\.com\/v3\/([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?$/);
+	if (!match) {
+		return undefined;
+	}
+	return { organization: match[1], project: match[2], repository: match[3] };
+}
+
+function repositoryKey(repository: WorkspaceRepository): string {
+	return `${repository.organization}/${repository.project}/${repository.repository}`;
+}
+
+function overviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+	const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'pr-overview.js'));
+	const nonce = randomBytes(16).toString('hex');
+	return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<style>
+:root { color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
+html, body { height: 100%; } body { margin: 0; } main { display: grid; height: 100vh; overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
+.toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px; border-bottom: 1px solid var(--vscode-panel-border); }
+select, button { min-height: 28px; box-sizing: border-box; font: inherit; } select { width: 100%; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border); }
+button { border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; } button:hover { background: var(--vscode-button-hoverBackground); }
+.content { min-width: 0; overflow: hidden; } .empty, .error { padding: 14px; color: var(--vscode-descriptionForeground); } .error { color: var(--vscode-errorForeground); }
+.pr-list { margin: 0; padding: 0; list-style: none; } .pr { width: 100%; padding: 10px; border: 0; border-bottom: 1px solid var(--vscode-panel-border); background: transparent; color: inherit; text-align: left; } .pr[aria-selected="true"] { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+.pr-title { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .pr-meta { display: block; margin-top: 3px; color: var(--vscode-descriptionForeground); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review { padding: 12px; } .review-header { display: flex; justify-content: space-between; gap: 8px; } h2 { margin: 0; font-size: 15px; line-height: 1.35; } .number, .meta, .files span { color: var(--vscode-descriptionForeground); font-size: 11px; } .branches { margin: 10px 0; padding: 8px; border-left: 3px solid var(--vscode-focusBorder); background: var(--vscode-editorWidget-background); overflow-wrap: anywhere; }
+.description { line-height: 1.45; white-space: pre-wrap; } .files { margin-top: 14px; border: 1px solid var(--vscode-panel-border); } .files h3 { margin: 0; padding: 8px; font-size: 12px; } .file { display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-top: 1px solid var(--vscode-panel-border); background: transparent; color: inherit; text-align: left; } .file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loading { padding: 22px; color: var(--vscode-descriptionForeground); text-align: center; }
+.content { display: grid; grid-template-rows: minmax(92px, 34%) minmax(0, 1fr); } .pr-picker { min-height: 0; overflow: auto; border-bottom: 1px solid var(--vscode-panel-border); } .pr-picker > h2 { position: sticky; top: 0; z-index: 1; padding: 8px 10px; background: var(--vscode-editorWidget-background); color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: uppercase; } .pr-picker .empty { padding: 10px; } .review-host { min-height: 0; overflow: auto; }
+.review-host { padding: 12px; } .review-host.is-loading { opacity: .65; pointer-events: none; } .header, .files-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; } h1, h2, h3 { margin: 0; } h1 { font-size: 15px; line-height: 1.35; } h2, h3 { font-size: 12px; } .number, .files-header span, .file-details span, .approvals-count, .reviewer-vote { color: var(--vscode-descriptionForeground); font-size: 11px; } .status { padding: 3px 6px; background: var(--vscode-testing-iconPassed); color: var(--vscode-editor-background); font-size: 10px; font-weight: 700; text-transform: uppercase; } .branches { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 10px; padding: 8px; border-left: 3px solid var(--vscode-focusBorder); background: var(--vscode-editorWidget-background); overflow-wrap: anywhere; } .branch-actions, .file-actions { display: flex; gap: 6px; flex-wrap: wrap; } .approval-actions { display: flex; gap: 6px; margin-top: 8px; } .review-host button { border: 1px solid var(--vscode-button-border, transparent); padding: 5px 8px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; } .review-host button:hover { background: var(--vscode-button-hoverBackground); } .checkout-branch, .open-file { background: var(--vscode-button-secondaryBackground) !important; color: var(--vscode-button-secondaryForeground) !important; } .branch-error, .approval-error, .action-error { color: var(--vscode-errorForeground); font-size: 11px; overflow-wrap: anywhere; } .approvals, .summary, .files { margin-top: 14px; } .approvals-header, .reviewer { display: flex; justify-content: space-between; gap: 8px; } .approval-list { display: grid; gap: 4px; margin-top: 7px; } .reviewer { padding: 6px 8px; border-left: 3px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background); font-size: 12px; } .reviewer-name { overflow-wrap: anywhere; } .summary .section-title { margin-bottom: 7px; color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: uppercase; } .markdown { line-height: 1.45; } .markdown p { margin: 0 0 8px; } .markdown code, code { font-family: var(--vscode-editor-font-family); } .files { border: 1px solid var(--vscode-panel-border); } .files-header { padding: 8px; background: var(--vscode-editorWidget-background); } .file { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 8px; border-top: 1px solid var(--vscode-panel-border); } .file-details { min-width: 0; display: grid; gap: 3px; } .file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .review-control { display: inline-flex; align-items: center; gap: 4px; color: var(--vscode-descriptionForeground); font-size: 11px; } .comment-count { min-height: auto !important; justify-self: start; padding: 0 !important; border: 0 !important; background: transparent !important; color: var(--vscode-textLink-foreground) !important; font-size: 11px !important; text-decoration: underline; } @media (max-width: 420px) { .file { grid-template-columns: 82px minmax(0, 1fr); } .file-actions { grid-column: 2; } .branches { grid-template-columns: 1fr; } .branch-actions { justify-content: flex-start; } }
+.review-host button { border-radius: var(--vscode-button-border-radius, 4px); }
+.review-host .branches { grid-template-columns: minmax(0, 1fr); margin-bottom: 16px; }
+.review-host .branch-actions { grid-column: 1; justify-content: flex-start; }
+.review-host .branch-error { grid-column: 1; }
+.review-host .approvals { margin-top: 0; }
+.review-host .approval-actions { margin-top: 12px; }
+.review-host .file { grid-template-columns: 72px minmax(110px, 1fr) auto; }
+.review-host .file-actions { grid-column: auto; flex-wrap: nowrap; }
+@media (max-width: 500px) { .review-host .file { grid-template-columns: 72px minmax(0, 1fr); } .review-host .file-actions { grid-column: 2; flex-wrap: wrap; } }
+/* The review view is narrower than the chat card; reset legacy card rules here. */
+.review-host, .review-host *, .review-host *::before, .review-host *::after { box-sizing: border-box; }
+.review-host { width: 100%; max-width: none; padding: 12px; overflow-x: hidden; }
+.review-host .header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+.review-host .branches { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; margin: 10px 0 0; }
+.review-host .branch-actions { display: flex; width: 100%; margin-top: 8px; }
+.review-host .approvals { display: block; clear: both; width: 100%; margin-top: 16px; }
+.review-host .approval-actions { display: flex; width: 100%; }
+.review-host .files { width: 100%; overflow: hidden; }
+.review-host .file { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; width: 100%; margin: 0; border: 0; border-top: 1px solid var(--vscode-panel-border); }
+.review-host .file-actions { display: flex; align-items: start; justify-content: flex-end; min-width: 0; }
+.review-host .file-actions button { flex: 0 1 auto; min-width: 0; }
+@media (max-width: 560px) { .review-host .file { grid-template-columns: 72px minmax(0, 1fr); } .review-host .file-actions { grid-column: 2; justify-content: flex-start; margin-top: 4px; } }
+</style></head><body><script nonce="${nonce}" src="${scriptUri}"></script></body></html>`;
+}
+
+function reviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+	const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'pr-overview.js'));
+	const nonce = randomBytes(16).toString('hex');
+	return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<style>
+:root { color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
+html, body, main { height: 100%; } body { margin: 0; overflow: hidden; } .review-host, .review-host *, .review-host *::before, .review-host *::after { box-sizing: border-box; }
+.review-host { width: 100%; height: 100%; overflow: auto; padding: 12px; } .review-host.is-loading { opacity: .65; pointer-events: none; }
+.header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; } h1, h2 { margin: 0; } h1 { font-size: 15px; line-height: 1.35; } h2 { font-size: 12px; } .number, .files-header span, .file-details span, .approvals-count, .reviewer-vote { color: var(--vscode-descriptionForeground); font-size: 11px; }
+.status { padding: 3px 6px; background: var(--vscode-testing-iconPassed); color: var(--vscode-editor-background); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.branches { display: grid; gap: 6px; width: 100%; margin-top: 12px; padding: 6px 8px; border-left: 3px solid var(--vscode-focusBorder); background: var(--vscode-editorWidget-background); overflow-wrap: anywhere; } .branch-actions { display: flex; flex-wrap: wrap; gap: 6px; } .branch-error, .approval-error, .action-error { color: var(--vscode-errorForeground); font-size: 11px; overflow-wrap: anywhere; } .branch-error:empty { display: none; } .checkout-branch { padding: 4px 8px; min-height: 24px; font-size: 11px; }
+.approvals, .summary, .files { width: 100%; margin-top: 16px; } .approvals-header, .reviewer, .files-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; } .approval-list { display: grid; gap: 4px; margin-top: 8px; } .reviewer { padding: 6px 8px; border-left: 3px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background); font-size: 12px; } .reviewer-name { min-width: 0; overflow-wrap: anywhere; } .approval-actions { display: flex; margin-top: 12px; }
+.section-title { margin-bottom: 7px; color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: uppercase; } .markdown { line-height: 1.45; } .markdown p { margin: 0 0 8px; } .markdown code, code { font-family: var(--vscode-editor-font-family); }
+.files { border: 1px solid var(--vscode-panel-border); overflow: hidden; } .files-header { padding: 8px; background: var(--vscode-editorWidget-background); } .file { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 8px; width: 100%; margin: 0; padding: 8px; border: 0; border-top: 1px solid var(--vscode-panel-border); } .file-details { min-width: 0; display: grid; gap: 3px; } .file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .file-actions { display: flex; align-items: start; gap: 6px; } .review-control { display: inline-flex; align-items: center; gap: 4px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+button { min-height: 28px; border: 1px solid var(--vscode-button-border, transparent); border-radius: var(--vscode-button-border-radius, 4px); padding: 5px 8px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; } button:hover { background: var(--vscode-button-hoverBackground); } button:disabled { opacity: .7; cursor: progress; } .checkout-branch, .open-file { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); } .comment-count { min-height: auto; justify-self: start; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--vscode-textLink-foreground); font-size: 11px; text-decoration: underline; }
+@media (max-width: 540px) { .file { grid-template-columns: 72px minmax(0, 1fr); } .file-actions { grid-column: 2; flex-wrap: wrap; } }
+</style></head><body><script nonce="${nonce}" src="${scriptUri}"></script></body></html>`;
+}
 
 interface OpenPullRequestFileDiffArguments {
 	organization: string;
@@ -322,6 +422,26 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 
 export function activate(context: vscode.ExtensionContext): void {
 	const authentication = new AzureDevOpsAuthentication();
+	const getGitApi = async (organization: string) => {
+		const environment = await authentication.getServerEnvironment();
+		const connection = new azureDevOps.WebApi(
+			`https://dev.azure.com/${encodeURIComponent(organization)}`,
+			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
+		);
+		return connection.getGitApi();
+	};
+	const getAuthenticatedUserId = async (organization: string): Promise<string> => {
+		const environment = await authentication.getServerEnvironment();
+		const connection = new azureDevOps.WebApi(
+			`https://dev.azure.com/${encodeURIComponent(organization)}`,
+			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
+		);
+		const userId = (await connection.connect()).authenticatedUser?.id;
+		if (!userId) {
+			throw new Error('Azure DevOps did not return the signed-in user identity.');
+		}
+		return userId;
+	};
 	let prDocumentContext = false;
 	const setPrDocumentContext = async (value: boolean): Promise<void> => {
 		prDocumentContext = value;
@@ -344,12 +464,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		if (!reference || !text.trim()) {
 			return;
 		}
-		const environment = await authentication.getServerEnvironment();
-		const connection = new azureDevOps.WebApi(
-			`https://dev.azure.com/${encodeURIComponent(reference.organization)}`,
-			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
-		);
-		const comment = await (await connection.getGitApi()).createComment({
+		const comment = await (await getGitApi(reference.organization)).createComment({
 			content: text.trim(),
 			commentType: CommentType.Text,
 		}, reference.repository, reference.pullRequestId, reference.threadId, reference.project);
@@ -363,12 +478,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		for (const thread of renderedCommentThreads.get(key) ?? []) {
 			thread.dispose();
 		}
-		const environment = await authentication.getServerEnvironment();
-		const connection = new azureDevOps.WebApi(
-			`https://dev.azure.com/${encodeURIComponent(arguments_.organization)}`,
-			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
-		);
-		const gitApi = await connection.getGitApi();
+		const gitApi = await getGitApi(arguments_.organization);
 		const threads = await gitApi.getThreads(arguments_.repository, arguments_.pullRequestId, arguments_.project);
 		const rendered = threads.flatMap(thread => {
 			if (thread.isDeleted || thread.threadContext?.filePath !== arguments_.path) {
@@ -412,12 +522,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		if (!text?.trim()) {
 			return;
 		}
-		const environment = await authentication.getServerEnvironment();
-		const connection = new azureDevOps.WebApi(
-			`https://dev.azure.com/${encodeURIComponent(reference.organization)}`,
-			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
-		);
-		await (await connection.getGitApi()).createThread({
+		await (await getGitApi(reference.organization)).createThread({
 			comments: [{ content: text.trim(), commentType: CommentType.Text }],
 			status: CommentThreadStatus.Active,
 			threadContext: {
@@ -515,6 +620,175 @@ export function activate(context: vscode.ExtensionContext): void {
 		return stdout.trim();
 	};
 	const reviewStateStore = new PullRequestReviewStateStore(context.workspaceState);
+	let reviewWebview: vscode.WebviewView | undefined;
+	let selectedOverviewRepositoryKey = context.workspaceState.get<string>('azure-devops-mcp.overview.repository');
+	let selectedOverviewPullRequestId: number | undefined;
+	let treeRepository: WorkspaceRepository | undefined;
+	let treePullRequests: readonly OverviewPullRequest[] = [];
+	let treeError: string | undefined;
+	const treeChanged = new vscode.EventEmitter<void>();
+	const workspaceRepositories = async (): Promise<WorkspaceRepository[]> => {
+		const folders = vscode.workspace.workspaceFolders ?? [];
+		const repositories = await Promise.all(folders.map(async folder => {
+			try {
+				const { stdout } = await execFileAsync('git', ['-C', folder.uri.fsPath, 'remote', 'get-url', 'origin']);
+				return repositoryFromRemote(stdout.trim());
+			} catch {
+				return undefined;
+			}
+		}));
+		return repositories.filter((repository): repository is WorkspaceRepository => repository !== undefined)
+			.filter((repository, index, values) => values.findIndex(value => repositoryKey(value) === repositoryKey(repository)) === index);
+	};
+	const refreshOverview = async (): Promise<void> => {
+		const repositories = await workspaceRepositories();
+		const selectedRepository = repositories.find(repository => repositoryKey(repository) === selectedOverviewRepositoryKey) ?? repositories[0];
+		if (!selectedRepository) {
+			treeRepository = undefined;
+			treePullRequests = [];
+			treeError = 'No Azure DevOps Git remotes were found in the workspace.';
+			treeChanged.fire();
+			await reviewWebview?.webview.postMessage({ error: treeError });
+			return;
+		}
+		selectedOverviewRepositoryKey = repositoryKey(selectedRepository);
+		await context.workspaceState.update('azure-devops-mcp.overview.repository', selectedOverviewRepositoryKey);
+		const selectedPullRequestKey = `azure-devops-mcp.overview.pullRequest.${selectedOverviewRepositoryKey}`;
+		if (selectedOverviewPullRequestId === undefined) {
+			selectedOverviewPullRequestId = context.workspaceState.get<number>(selectedPullRequestKey);
+		}
+		try {
+			const gitApi = await getGitApi(selectedRepository.organization);
+			const pullRequests = await gitApi.getPullRequests(
+				selectedRepository.repository,
+				{ status: PullRequestStatus.Active },
+				selectedRepository.project,
+				undefined,
+				undefined,
+				50,
+			);
+			const summaries: OverviewPullRequest[] = pullRequests.flatMap(pullRequest => {
+				if (!pullRequest.pullRequestId || !pullRequest.sourceRefName || !pullRequest.targetRefName) {
+					return [];
+				}
+				return [{
+					id: pullRequest.pullRequestId,
+					title: pullRequest.title ?? 'Untitled pull request',
+					description: pullRequest.description,
+					sourceRef: pullRequest.sourceRefName,
+					targetRef: pullRequest.targetRefName,
+					changes: [],
+				}];
+			});
+			const selectedPullRequest = summaries.find(pullRequest => pullRequest.id === selectedOverviewPullRequestId) ?? summaries[0];
+			let review: Awaited<ReturnType<typeof loadPullRequestReview>> | undefined;
+			if (selectedPullRequest) {
+				selectedOverviewPullRequestId = selectedPullRequest.id;
+				await context.workspaceState.update(selectedPullRequestKey, selectedPullRequest.id);
+				const pullRequest = await gitApi.getPullRequest(selectedRepository.repository, selectedPullRequest.id, selectedRepository.project);
+				review = await loadPullRequestReview(pullRequest, selectedRepository, {
+					getGitApi,
+					getCurrentUserId: getAuthenticatedUserId,
+					getReviewedPaths: reviewState => Promise.resolve(reviewStateStore.getReviewedPaths(reviewState)),
+				});
+			}
+			treeRepository = selectedRepository;
+			treePullRequests = summaries;
+			treeError = undefined;
+			treeChanged.fire();
+			await reviewWebview?.webview.postMessage({ review });
+		} catch (overviewError) {
+			treeRepository = selectedRepository;
+			treePullRequests = [];
+			treeError = overviewError instanceof Error ? overviewError.message : 'Unable to load pull requests.';
+			treeChanged.fire();
+			await reviewWebview?.webview.postMessage({ error: treeError });
+		}
+	};
+	const pullRequestsProvider: vscode.TreeDataProvider<vscode.TreeItem> = {
+		onDidChangeTreeData: treeChanged.event,
+		getTreeItem: item => item,
+		getChildren: element => {
+			if (!treeRepository) {
+				return treeError ? [new vscode.TreeItem(treeError, vscode.TreeItemCollapsibleState.None)] : [];
+			}
+			if (!element) {
+				const repositoryItem = new vscode.TreeItem(treeRepository.repository, vscode.TreeItemCollapsibleState.Expanded);
+				repositoryItem.description = `${treeRepository.organization}/${treeRepository.project}`;
+				repositoryItem.iconPath = new vscode.ThemeIcon('repo');
+				repositoryItem.command = { command: selectOverviewRepositoryCommand, title: 'Select Pull Request Repository' };
+				repositoryItem.contextValue = 'azure-devops-mcp.repository';
+				return [repositoryItem];
+			}
+			return treePullRequests.map(pullRequest => {
+				const item = new vscode.TreeItem(`#${pullRequest.id} ${pullRequest.title}`, vscode.TreeItemCollapsibleState.None);
+				item.description = `${pullRequest.sourceRef.replace('refs/heads/', '')} -> ${pullRequest.targetRef.replace('refs/heads/', '')}`;
+				item.iconPath = new vscode.ThemeIcon(pullRequest.id === selectedOverviewPullRequestId ? 'eye' : 'git-pull-request');
+				item.command = { command: 'azure-devops-mcp.selectOverviewPullRequest', title: 'Select Pull Request', arguments: [pullRequest.id] };
+				return item;
+			});
+		},
+	};
+	const reviewProvider: vscode.WebviewViewProvider = {
+		resolveWebviewView: view => {
+			reviewWebview = view;
+			view.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'dist')] };
+			view.webview.html = reviewHtml(view.webview, context.extensionUri);
+			view.webview.onDidReceiveMessage(async (message: unknown) => {
+				if (!message || typeof message !== 'object') {
+					return;
+				}
+				const request = message as { type?: string; id?: string; request?: { name?: string; arguments?: unknown } };
+				if (request.type === 'action' && request.id && request.request?.name && request.request.arguments) {
+					let result: { isError?: boolean; content?: Array<{ type: string; text: string }>; structuredContent?: object } = {};
+					try {
+						const arguments_ = request.request.arguments;
+						switch (request.request.name) {
+							case 'open_pull_request_file_diff':
+								if (!isOpenPullRequestFileDiffArguments(arguments_)) {throw new Error('Invalid pull request diff request.');}
+								await openPullRequestFileDiff(arguments_);
+								break;
+							case 'open_pull_request_file':
+								if (!isOpenPullRequestFileArguments(arguments_)) {throw new Error('Invalid pull request file request.');}
+								await openPullRequestFile(arguments_);
+								break;
+							case 'checkout_pull_request_branch':
+								if (!isCheckoutPullRequestBranchArguments(arguments_)) {throw new Error('Invalid pull request branch request.');}
+								result.structuredContent = { currentBranch: await checkoutPullRequestBranch(arguments_) };
+								break;
+							case 'set_pull_request_file_reviewed':
+								if (!isPullRequestReviewStateArguments(arguments_) || arguments_.path === undefined || arguments_.reviewed === undefined) {throw new Error('Invalid review state request.');}
+								await reviewStateStore.setFileReviewed({ ...arguments_, path: arguments_.path, reviewed: arguments_.reviewed });
+								break;
+							case 'approve_pull_request': {
+								if (!isPullRequestReviewStateArguments(arguments_)) {throw new Error('Invalid approval request.');}
+								const userId = await getAuthenticatedUserId(arguments_.organization);
+								const gitApi = await getGitApi(arguments_.organization);
+								const reviewer = await gitApi.createPullRequestReviewer({ id: userId, vote: 10 }, arguments_.repository, arguments_.pullRequestId, userId, arguments_.project);
+								result.structuredContent = { reviewer, reviewers: await gitApi.getPullRequestReviewers(arguments_.repository, arguments_.pullRequestId, arguments_.project) };
+								break;
+							}
+							default:
+								throw new Error('Unsupported pull request action.');
+						}
+					} catch (actionError) {
+						result = { isError: true, content: [{ type: 'text', text: actionError instanceof Error ? actionError.message : 'Pull request action failed.' }] };
+					}
+					await view.webview.postMessage({ type: 'actionResult', id: request.id, result });
+					return;
+				}
+				if (request.type === 'ready') {
+					await refreshOverview();
+				}
+			});
+		},
+	};
+	const pullRequestsTree = vscode.window.createTreeView(pullRequestsViewId, { treeDataProvider: pullRequestsProvider });
+	pullRequestsTree.onDidChangeVisibility(() => {
+		if (pullRequestsTree.visible) {
+			void refreshOverview();
+		}
+	});
 	const commandBridge = new PullRequestCommandBridge(
 		openPullRequestFileDiff,
 		openPullRequestFile,
@@ -558,6 +832,30 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(
 		commandBridge,
 		commentController,
+		pullRequestsTree,
+		vscode.window.registerWebviewViewProvider(reviewViewId, reviewProvider),
+		vscode.commands.registerCommand(refreshOverviewCommand, () => refreshOverview()),
+		vscode.commands.registerCommand(selectOverviewRepositoryCommand, async () => {
+			const repositories = await workspaceRepositories();
+			const selected = await vscode.window.showQuickPick(repositories.map(repository => ({
+				label: repository.repository,
+				description: `${repository.organization}/${repository.project}`,
+				repository,
+			})), { placeHolder: 'Select an Azure DevOps workspace repository' });
+			if (selected) {
+				selectedOverviewRepositoryKey = repositoryKey(selected.repository);
+				selectedOverviewPullRequestId = context.workspaceState.get<number>(`azure-devops-mcp.overview.pullRequest.${selectedOverviewRepositoryKey}`);
+				await refreshOverview();
+			}
+		}),
+		vscode.commands.registerCommand('azure-devops-mcp.selectOverviewPullRequest', async (pullRequestId: unknown) => {
+			if (typeof pullRequestId !== 'number') {
+				return;
+			}
+			selectedOverviewPullRequestId = pullRequestId;
+			await context.workspaceState.update(`azure-devops-mcp.overview.pullRequest.${selectedOverviewRepositoryKey}`, pullRequestId);
+			await refreshOverview();
+		}),
 		vscode.window.onDidChangeActiveTextEditor(editor => { void updatePrDocumentContext(editor); }),
 		vscode.commands.registerCommand('azure-devops-mcp.signIn', () => authentication.signIn()),
 		vscode.commands.registerCommand(addPullRequestCommentCommand, async (uri?: vscode.Uri, line?: number) => {

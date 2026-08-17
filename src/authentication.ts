@@ -8,7 +8,7 @@ const azureDevOpsScopes = [
 export class AzureDevOpsAuthentication {
 	public async signIn(): Promise<void> {
 		const session = await this.getSession();
-		vscode.window.showInformationMessage(`Azure DevOps MCP is signed in as ${session.account.label}.`);
+		vscode.window.showInformationMessage(`Azure DevOps PRs (MCP) is signed in as ${session.account.label}.`);
 	}
 
 	public async getServerEnvironment(): Promise<Record<string, string>> {
@@ -20,7 +20,7 @@ export class AzureDevOpsAuthentication {
 
 	private async getSession(): Promise<vscode.AuthenticationSession> {
 		return vscode.authentication.getSession('microsoft', azureDevOpsScopes, {
-			createIfNone: { detail: 'Azure DevOps MCP needs access to Azure DevOps as you.' },
+			createIfNone: { detail: 'Azure DevOps PRs (MCP) needs access to Azure DevOps as you.' },
 		});
 	}
 }

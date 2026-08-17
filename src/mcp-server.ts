@@ -6,13 +6,13 @@ import {
 	CommentType,
 	GitPullRequest,
 	GitPullRequestCommentThread,
-	IdentityRefWithVote,
 	GitVersionType,
 	PullRequestStatus,
 } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as z from 'zod/v4';
+import { loadPullRequestReview, reviewerSummary } from './pull-request-review';
 
 const repositorySchema = {
 	organization: z.string().min(1).describe('Azure DevOps organization name.'),
@@ -81,16 +81,6 @@ function pullRequestSummary(pullRequest: GitPullRequest): Record<string, unknown
 		createdAt: pullRequest.creationDate,
 		sourceRef: pullRequest.sourceRefName,
 		targetRef: pullRequest.targetRefName,
-	};
-}
-
-function reviewerSummary(reviewer: IdentityRefWithVote): Record<string, unknown> {
-	return {
-		id: reviewer.id,
-		displayName: reviewer.displayName,
-		vote: reviewer.vote ?? 0,
-		isRequired: reviewer.isRequired ?? false,
-		hasDeclined: reviewer.hasDeclined ?? false,
 	};
 }
 
@@ -236,90 +226,15 @@ async function main(): Promise<void> {
 		project: string,
 		repository: string,
 	) => {
-		const pullRequestId = pullRequest.pullRequestId;
-		if (!pullRequestId) {
-			throw new Error('Azure DevOps did not return a pull request ID.');
-		}
-		const sourceCommit = pullRequest.lastMergeSourceCommit?.commitId;
-		const targetCommit = pullRequest.lastMergeTargetCommit?.commitId;
-		if (!sourceCommit || !targetCommit) {
-			throw new Error(`Pull request ${pullRequestId} does not have comparable source and target commits.`);
-		}
-
-		const gitApi = await getGitApi(organization);
-		const iterations = await gitApi.getPullRequestIterations(repository, pullRequestId, project);
-		const latestIteration = iterations.at(-1);
-		if (!latestIteration?.id) {
-			throw new Error(`Pull request ${pullRequestId} does not have an iteration to compare.`);
-		}
-
-		const changes = await gitApi.getPullRequestIterationChanges(
-			repository,
-			pullRequestId,
-			latestIteration.id,
-			project,
-			1000,
-		);
-		const reviewedPaths = new Set(await getPullRequestReviewState({ organization, project, repository, pullRequestId }));
-		const currentUserId = await getAuthenticatedUserId(organization);
-		const commentThreads = await gitApi.getThreads(repository, pullRequestId, project);
-		const commentCounts = new Map<string, number>();
-		for (const thread of commentThreads) {
-			const path = thread.threadContext?.filePath;
-			if (path && !thread.isDeleted && (thread.comments ?? []).some(comment => !comment.isDeleted)) {
-				commentCounts.set(path, (commentCounts.get(path) ?? 0) + 1);
-			}
-		}
-		const changedFiles = (changes.changeEntries ?? []).flatMap(change => {
-			const path = change.item?.path;
-			if (!path || change.changeType === undefined) {
-				return [];
-			}
-			const arguments_ = {
-				organization,
-				project,
-				repository,
-				pullRequestId,
-				path,
-				originalPath: change.originalPath,
-				sourceCommit,
-				targetCommit,
-				changeType: change.changeType,
-			};
-			return [{
-				organization,
-				project,
-				repository,
-				pullRequestId,
-				path,
-				originalPath: change.originalPath,
-				changeType: change.changeType,
-				reviewed: reviewedPaths.has(path),
-				commentCount: commentCounts.get(path) ?? 0,
-				sourceCommit,
-				targetCommit,
-				diffLink: openPullRequestFileDiffLink(arguments_),
-			}];
+		const review = await loadPullRequestReview(pullRequest, { organization, project, repository }, {
+			getGitApi,
+			getCurrentUserId: getAuthenticatedUserId,
+			getReviewedPaths: getPullRequestReviewState,
 		});
-		const review = {
-			id: pullRequestId,
-			organization,
-			project,
-			repository,
-			title: pullRequest.title,
-			description: pullRequest.description,
-			status: pullRequest.status,
-			sourceRef: pullRequest.sourceRefName,
-			targetRef: pullRequest.targetRefName,
-			currentUserId,
-			reviewers: (pullRequest.reviewers ?? []).map(reviewerSummary),
-			changes: changedFiles,
-			changesTruncated: changes.nextSkip !== undefined,
-		};
 		return {
 			content: [{
 				type: 'text' as const,
-				text: JSON.stringify({ ...pullRequestSummary(pullRequest), reviewers: review.reviewers, changes: changedFiles, changesTruncated: review.changesTruncated }, null, 2),
+				text: JSON.stringify({ ...pullRequestSummary(pullRequest), reviewers: review.reviewers, changes: review.changes, changesTruncated: review.changesTruncated }, null, 2),
 			}],
 			structuredContent: review,
 		};

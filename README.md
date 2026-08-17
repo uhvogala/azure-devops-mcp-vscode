@@ -1,10 +1,10 @@
-# Azure DevOps MCP
+# Azure DevOps PRs (MCP)
 
 This VS Code extension exposes Azure DevOps Git pull requests to agents through a local MCP server. It uses the official MCP TypeScript SDK, `azure-devops-node-api`, and VS Code's Microsoft authentication provider. No personal access token, client ID, or client secret is created, copied, or maintained.
 
 ## Use
 
-1. Run `Azure DevOps MCP: Sign In to Azure DevOps`. VS Code opens its normal Microsoft sign-in flow when needed.
+1. Run `Azure DevOps PRs (MCP): Sign In to Azure DevOps`. VS Code opens its normal Microsoft sign-in flow when needed.
 2. Start an agent conversation. VS Code discovers the `Azure DevOps pull requests` MCP server automatically.
 
 The server provides `list_pull_requests`, `get_pull_request`, `open_pull_request_file_diff`, `create_pull_request`, and `submit_pull_request`. `create_pull_request` prepares a local draft; `submit_pull_request` creates the remote pull request and requires `confirm: true`. Both use source and target refs in `refs/heads/...` form and the caller's Azure DevOps permissions.
