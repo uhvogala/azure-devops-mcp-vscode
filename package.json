@@ -1,10 +1,19 @@
 {
   "name": "azure-devops-prs-mcp",
-  "publisher": "local",
+  "publisher": "aitostack",
   "displayName": "Azure DevOps PRs (MCP)",
   "description": "Expose Azure DevOps pull requests to coding agents through MCP",
-  "version": "0.0.42",
+  "version": "0.0.43",
   "icon": "resources/marketplace-icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/uhvogala/azure-devops-mcp-vscode.git"
+  },
+  "homepage": "https://github.com/uhvogala/azure-devops-mcp-vscode#readme",
+  "bugs": {
+    "url": "https://github.com/uhvogala/azure-devops-mcp-vscode/issues"
+  },
   "engines": {
     "vscode": "^1.125.0"
   },
