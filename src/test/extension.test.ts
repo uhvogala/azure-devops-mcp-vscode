@@ -10,7 +10,7 @@ import {
 
 suite('Azure DevOps PRs (MCP) extension', () => {
 	test('activates and registers its commands', async () => {
-		const extension = vscode.extensions.getExtension('local.azure-devops-prs-mcp');
+		const extension = vscode.extensions.getExtension('aitostack.azure-devops-prs-mcp');
 		assert.ok(extension, 'Azure DevOps PRs (MCP) extension should be available');
 
 		await extension.activate();
