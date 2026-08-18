@@ -178,7 +178,13 @@ async function invokeExtensionCommand(urlEnvironment: string, arguments_: object
 
 async function main(): Promise<void> {
 	const getAccessToken = createTokenProvider();
-	const server = new McpServer({ name: 'azure-devops-pull-requests', version: '0.0.1' });
+	const server = new McpServer(
+		{ name: 'azure-devops-pull-requests', version: '0.0.1' },
+		{
+			instructions:
+				'This server manages Azure DevOps pull requests. Whenever the user asks to show, open, view, or review a specific pull request, call get_pull_request (with includeChanges: true, which is the default) instead of only reporting text — it renders an interactive review card with approvals, checkout, and file actions. Use list_pull_requests first if you need to find a pull request\'s ID. To draft a new pull request, call create_pull_request, which also renders an interactive card for editing and submitting.',
+		},
+	);
 
 	server.registerResource(
 		'Azure DevOps pull request review card',
@@ -284,7 +290,7 @@ async function main(): Promise<void> {
 	server.registerTool(
 		'list_pull_requests',
 		{
-			description: 'List pull requests in an Azure DevOps Git repository.',
+			description: 'List pull requests in an Azure DevOps Git repository. Follow up with get_pull_request to show an interactive review card for a specific one.',
 			inputSchema: z.object({
 				...repositorySchema,
 				status: z.enum(['active', 'abandoned', 'completed', 'all']).default('active'),
@@ -452,11 +458,11 @@ async function main(): Promise<void> {
 	server.registerTool(
 		'get_pull_request',
 		{
-			description: 'Get an Azure DevOps pull request by ID.',
+			description: 'Show an Azure DevOps pull request by ID as an interactive review card with approvals, checkout, and file actions. Call this whenever the user asks to show, open, view, or review a specific pull request.',
 			inputSchema: z.object({
 				...repositorySchema,
 				pullRequestId: z.number().int().positive(),
-				includeChanges: z.boolean().default(false).describe('Include changed files with links to VS Code native diffs.'),
+				includeChanges: z.boolean().default(true).describe('Include changed files and render the interactive review card. Set to false for a lightweight JSON-only response.'),
 			}),
 			_meta: {
 				ui: { resourceUri: pullRequestReviewCardUri },
