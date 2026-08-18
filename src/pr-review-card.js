@@ -1,14 +1,17 @@
 import { App, applyDocumentTheme, applyHostStyleVariables } from '@modelcontextprotocol/ext-apps';
 import { setSharedState, subscribeToSharedState } from './mcp-app-shared-state';
 import { renderPullRequestDraft } from './pull-request-draft-ui';
+import { subscribeToPullRequestRefresh } from './pull-request-refresh';
 import { applyReviewedPaths, renderPullRequestReview } from './pull-request-review-ui';
 
-const app = new App({ name: 'Azure DevOps pull request review', version: '0.0.54' }, {});
+const app = new App({ name: 'Azure DevOps pull request review', version: '0.0.62' }, {});
 const root = document.createElement('main');
 root.className = 'review-card';
 document.body.append(root);
 let loadingOperations = 0;
 let unsubscribeSharedState = () => undefined;
+let unsubscribeReviewRefresh = () => undefined;
+let unsubscribeRepositoryRefresh = () => undefined;
 
 function element(name, className) {
 	const node = document.createElement(name);
@@ -62,6 +65,8 @@ function resultError(result) {
 }
 
 function renderDraft(draft) {
+	unsubscribeRepositoryRefresh();
+	unsubscribeReviewRefresh();
 	unsubscribeSharedState();
 	unsubscribeSharedState = renderPullRequestDraft(root, draft, {
 		callAction: request => app.callServerTool(request),
@@ -78,6 +83,8 @@ function renderDraft(draft) {
 }
 
 function renderReview(review) {
+	unsubscribeRepositoryRefresh();
+	unsubscribeReviewRefresh();
 	unsubscribeSharedState();
 	renderPullRequestReview(root, review, request => app.callServerTool({
 		name: request.name,
@@ -86,6 +93,34 @@ function renderReview(review) {
 	unsubscribeSharedState = subscribeToSharedState(app, review.sharedState, [], value => {
 		applyReviewedPaths(review, value);
 		renderReview(review);
+	});
+	const loadReview = async () => (await app.callServerTool({
+			name: 'get_pull_request',
+			arguments: {
+				organization: review.organization,
+				project: review.project,
+				repository: review.repository,
+				pullRequestId: review.id,
+				includeChanges: true,
+			},
+		})).structuredContent;
+	const refreshReview = async () => {
+		const nextReview = await loadReview();
+		if (nextReview?.id && Array.isArray(nextReview.changes)) {
+			nextReview.currentBranch = review.currentBranch;
+			renderReview(nextReview);
+		}
+	};
+	unsubscribeReviewRefresh = subscribeToPullRequestRefresh(
+		review,
+		loadReview,
+		renderReview,
+	);
+	unsubscribeRepositoryRefresh = subscribeToSharedState(app, review.repositoryState, {}, value => {
+		if (value && typeof value === 'object' && typeof value.currentBranch === 'string') {
+			review.currentBranch = value.currentBranch;
+		}
+		void refreshReview();
 	});
 }
 

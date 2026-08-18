@@ -78,13 +78,17 @@ export function renderPullRequestReview(root, review, callAction) {
 	for (const [label, branch] of [['Checkout source', review.sourceRef], ['Checkout target', review.targetRef]]) {
 		const button = element('button', 'checkout-branch');
 		button.type = 'button';
-		button.textContent = label;
+		button.textContent = review.currentBranch === branch.replace('refs/heads/', '') ? 'Current branch' : label;
 		button.addEventListener('click', async () => {
 			button.disabled = true;
 			button.textContent = 'Checking out...';
 			branchError.textContent = '';
 			const result = await run('checkout_pull_request_branch', { organization: review.organization, project: review.project, repository: review.repository, branch }, branchError);
-			button.textContent = result?.structuredContent?.currentBranch === branch.replace('refs/heads/', '') ? 'Current branch' : label;
+			if (result?.structuredContent?.currentBranch) {
+				review.currentBranch = result.structuredContent.currentBranch;
+				renderPullRequestReview(root, review, callAction);
+				return;
+			}
 			button.disabled = false;
 		});
 		branchActions.append(button);

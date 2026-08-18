@@ -1,5 +1,6 @@
 import { applyReviewedPaths, renderPullRequestReview } from './pull-request-review-ui';
 import { renderPullRequestDraft } from './pull-request-draft-ui';
+import { subscribeToPullRequestRefresh } from './pull-request-refresh';
 
 const vscode = acquireVsCodeApi();
 const root = document.createElement('main');
@@ -8,6 +9,8 @@ document.body.append(root);
 const pendingActions = new Map();
 let review;
 let disposeDraft = () => undefined;
+let disposeReviewRefresh = () => undefined;
+let disposeRepositoryRefresh = () => undefined;
 const sharedStateListeners = new Map();
 
 function callHostAction(request) {
@@ -49,6 +52,8 @@ async function setSharedState(sharedState, value) {
 }
 
 function renderDraft(draft) {
+	disposeRepositoryRefresh();
+	disposeReviewRefresh();
 	disposeDraft();
 	review = undefined;
 	disposeDraft = renderPullRequestDraft(root, draft, {
@@ -66,10 +71,39 @@ function renderDraft(draft) {
 }
 
 function renderReview(nextReview) {
+	disposeRepositoryRefresh();
+	disposeReviewRefresh();
 	disposeDraft();
 	disposeDraft = () => undefined;
 	review = nextReview;
 	renderPullRequestReview(root, review, callHostAction);
+	const loadReview = async () => (await callHostAction({
+			name: 'get_pull_request',
+			arguments: {
+				organization: review.organization,
+				project: review.project,
+				repository: review.repository,
+				pullRequestId: review.id,
+			},
+		})).structuredContent;
+	const refreshReview = async () => {
+		const refreshed = await loadReview();
+		if (refreshed?.id && Array.isArray(refreshed.changes)) {
+			refreshed.currentBranch = review.currentBranch;
+			renderReview(refreshed);
+		}
+	};
+	disposeReviewRefresh = subscribeToPullRequestRefresh(
+		review,
+		loadReview,
+		renderReview,
+	);
+	disposeRepositoryRefresh = subscribeSharedState(review.repositoryState, {}, value => {
+		if (value && typeof value === 'object' && typeof value.currentBranch === 'string') {
+			review.currentBranch = value.currentBranch;
+		}
+		void refreshReview();
+	});
 }
 
 window.addEventListener('message', event => {

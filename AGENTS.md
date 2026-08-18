@@ -2,6 +2,8 @@
 
 Before using any Azure DevOps MCP tool, run `Azure DevOps PRs (MCP): Sign In to Azure DevOps` and complete VS Code's Microsoft sign-in flow. Do not attempt pull request, draft, review, checkout, or comment operations until sign-in succeeds.
 
+Keep VS Code's built-in Git extension enabled. This extension uses its repository API for workspace discovery, checkout, and local pull request refreshes.
+
 When the Azure DevOps organization, project, or repository is unknown, call `get_workspace_repositories` once. Prefer its `activeRepository`; otherwise use the returned workspace repository list rather than searching files or manually parsing Git remotes.
 
 When a user asks to show, open, view, or review a specific pull request, call `get_pull_request` directly. It renders the interactive review card. Use `list_pull_requests` only when the pull request ID is unknown.

@@ -1,5 +1,5 @@
 import { IGitApi } from 'azure-devops-node-api/GitApi';
-import { GitPullRequest, IdentityRefWithVote } from 'azure-devops-node-api/interfaces/GitInterfaces';
+import { GitPullRequest, GitVersionType, IdentityRefWithVote } from 'azure-devops-node-api/interfaces/GitInterfaces';
 
 export interface PullRequestIdentity {
 	organization: string;
@@ -27,6 +27,9 @@ export interface PullRequestReview {
 	status?: number;
 	sourceRef: string;
 	targetRef: string;
+	sourceCommit: string;
+	targetCommit: string;
+	currentBranch?: string;
 	currentUserId?: string;
 	reviewers: ReturnType<typeof reviewerSummary>[];
 	changes: Array<PullRequestReviewChange>;
@@ -65,12 +68,16 @@ export async function loadPullRequestReview(
 		throw new Error('Azure DevOps did not return enough pull request information for review.');
 	}
 	const gitApi = await dependencies.getGitApi(identity.organization);
-	const iteration = (await gitApi.getPullRequestIterations(identity.repository, pullRequestId, identity.project)).at(-1);
-	if (!iteration?.id) {
-		throw new Error(`Pull request ${pullRequestId} does not have an iteration to compare.`);
-	}
 	const [changes, threads, reviewedPaths, currentUserId] = await Promise.all([
-		gitApi.getPullRequestIterationChanges(identity.repository, pullRequestId, iteration.id, identity.project, 1000),
+		gitApi.getCommitDiffs(
+			identity.repository,
+			identity.project,
+			false,
+			1000,
+			undefined,
+			{ version: targetCommit, versionType: GitVersionType.Commit },
+			{ version: sourceCommit, versionType: GitVersionType.Commit },
+		),
 		gitApi.getThreads(identity.repository, pullRequestId, identity.project),
 		dependencies.getReviewedPaths?.({ ...identity, pullRequestId }) ?? Promise.resolve([]),
 		dependencies.getCurrentUserId?.(identity.organization),
@@ -91,11 +98,13 @@ export async function loadPullRequestReview(
 		status: pullRequest.status,
 		sourceRef: pullRequest.sourceRefName,
 		targetRef: pullRequest.targetRefName,
+		sourceCommit,
+		targetCommit,
 		currentUserId,
 		reviewers: (pullRequest.reviewers ?? []).map(reviewerSummary),
-		changes: (changes.changeEntries ?? []).flatMap(change => {
+		changes: (changes.changes ?? []).flatMap(change => {
 			const path = change.item?.path;
-			if (!path || change.changeType === undefined) {
+			if (!path || change.item?.isFolder || change.changeType === undefined) {
 				return [];
 			}
 			return [{
@@ -110,6 +119,6 @@ export async function loadPullRequestReview(
 				targetCommit,
 			}];
 		}),
-		changesTruncated: changes.nextSkip !== undefined,
+		changesTruncated: !changes.allChangesIncluded,
 	};
 }

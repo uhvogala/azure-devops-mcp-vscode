@@ -3,7 +3,7 @@
   "publisher": "aitostack",
   "displayName": "Azure DevOps PRs (MCP)",
   "description": "Interactive Azure DevOps and Azure Repos pull request review, drafts, and checkout workflows for VS Code agents and GitHub Copilot Chat through MCP.",
-  "version": "0.0.54",
+  "version": "0.0.62",
   "icon": "resources/marketplace-icon.png",
   "license": "MIT",
   "repository": {

@@ -1,5 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
+import { GitVersionType } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import {
 	CheckoutPullRequestBranchArguments,
 	PullRequestCommandBridge,
@@ -7,6 +8,7 @@ import {
 	PullRequestReviewStateStore,
 	SharedWorkspaceStateStore,
 } from '../extension';
+import { loadPullRequestReview } from '../pull-request-review';
 
 
 suite('Azure DevOps PRs (MCP) extension', () => {
@@ -149,6 +151,43 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 		assert.deepStrictEqual(store.getReviewedPaths(identity), [
 			'/scripts/setup.ts',
 			'/src/example.ts',
+		]);
+	});
+
+	test('loads cumulative pull request changes instead of the latest iteration delta', async () => {
+		let diffArguments: unknown[] | undefined;
+		const review = await loadPullRequestReview({
+			pullRequestId: 123,
+			lastMergeSourceCommit: { commitId: 'source-commit' },
+			lastMergeTargetCommit: { commitId: 'target-commit' },
+			sourceRefName: 'refs/heads/feature/example',
+			targetRefName: 'refs/heads/develop',
+		} as never, {
+			organization: 'example-org',
+			project: 'example-project',
+			repository: 'example-repository',
+		}, {
+			getGitApi: async () => ({
+				getCommitDiffs: async (...arguments_: unknown[]) => {
+					diffArguments = arguments_;
+					return {
+						changes: [
+							{ item: { path: '/pipelines', isFolder: true }, changeType: 2 },
+							{ item: { path: '/.npmrc' }, changeType: 16 },
+						],
+						allChangesIncluded: true,
+					};
+				},
+				getThreads: async () => [],
+			}) as never,
+		});
+
+		assert.deepStrictEqual(review.changes.map(change => ({ path: change.path, changeType: change.changeType })), [
+			{ path: '/.npmrc', changeType: 16 },
+		]);
+		assert.deepStrictEqual(diffArguments?.slice(5), [
+			{ version: 'target-commit', versionType: GitVersionType.Commit },
+			{ version: 'source-commit', versionType: GitVersionType.Commit },
 		]);
 	});
 

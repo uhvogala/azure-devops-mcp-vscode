@@ -56,6 +56,7 @@ export function renderPullRequestDraft(root, draft, { callAction, subscribeShare
 	const renderPreview = () => {
 		descriptionPreview.innerHTML = DOMPurify.sanitize(marked.parse(descriptionInput.value || 'No description provided.'));
 	};
+	let submitting = false;
 	let descriptionTimer;
 	let descriptionUpdate = Promise.resolve();
 	const publishDescription = () => {
@@ -82,7 +83,7 @@ export function renderPullRequestDraft(root, draft, { callAction, subscribeShare
 	});
 	const unsubscribe = subscribeSharedState(draft.sharedState, { description: draft.description }, value => {
 		if (value && typeof value === 'object' && value.deleted === true) {
-			onDeleted?.();
+			if (!submitting) {onDeleted?.();}
 			return;
 		}
 		if (!value || typeof value !== 'object' || typeof value.description !== 'string') {return;}
@@ -147,6 +148,7 @@ export function renderPullRequestDraft(root, draft, { callAction, subscribeShare
 		}
 	});
 	submitButton.addEventListener('click', async () => {
+		submitting = true;
 		submitButton.disabled = true;
 		submitButton.textContent = 'Submitting...';
 	submitError.textContent = '';
@@ -172,6 +174,7 @@ export function renderPullRequestDraft(root, draft, { callAction, subscribeShare
 			if (error) {throw new Error(error);}
 			onSubmitted?.(result.structuredContent);
 		} catch (error) {
+			submitting = false;
 			submitButton.textContent = 'Retry submit';
 			submitButton.disabled = false;
 			submitError.textContent = error instanceof Error ? error.message : 'VS Code could not create this pull request.';

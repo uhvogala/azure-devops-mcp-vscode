@@ -10,9 +10,6 @@ import {
 } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { basename } from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { AzureDevOpsAuthentication } from './authentication';
 import { loadPullRequestReview } from './pull-request-review';
 
@@ -27,17 +24,40 @@ const reviewViewId = 'azure-devops-mcp.review';
 const refreshOverviewCommand = 'azure-devops-mcp.refreshOverview';
 const selectOverviewRepositoryCommand = 'azure-devops-mcp.selectOverviewRepository';
 const pullRequestDraftIndexKey = 'azure-devops-mcp.drafts';
-const execFileAsync = promisify(execFile);
 
 interface WorkspaceRepository {
 	organization: string;
 	project: string;
 	repository: string;
+	currentBranch?: string;
 }
 
 interface WorkspaceRepositoryContext {
 	repositories: WorkspaceRepository[];
 	activeRepository?: WorkspaceRepository;
+}
+
+interface GitRepository {
+	rootUri: vscode.Uri;
+	state: {
+		remotes: readonly { name: string; fetchUrl?: string; pushUrl?: string }[];
+		HEAD?: { name?: string };
+		onDidChange: vscode.Event<void>;
+	};
+	checkout(treeish: string): Promise<void>;
+	fetch(options?: { remote?: string; ref?: string }): Promise<void>;
+}
+
+interface GitApi {
+	state: 'uninitialized' | 'initialized';
+	onDidChangeState: vscode.Event<'uninitialized' | 'initialized'>;
+	repositories: readonly GitRepository[];
+	getRepository(uri: vscode.Uri): GitRepository | undefined;
+	onDidOpenRepository: vscode.Event<GitRepository>;
+}
+
+interface GitExtension {
+	getAPI(version: 1): GitApi;
 }
 
 interface OverviewPullRequest {
@@ -75,6 +95,10 @@ function repositoryFromRemote(remote: string): WorkspaceRepository | undefined {
 
 function repositoryKey(repository: WorkspaceRepository): string {
 	return `${repository.organization}/${repository.project}/${repository.repository}`;
+}
+
+function repositoryRefreshStateKey(repository: WorkspaceRepository): string {
+	return `azure-devops-mcp.repository.${repository.organization}.${repository.project}.${repository.repository}.changed`;
 }
 
 function reviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
@@ -692,20 +716,24 @@ export function activate(context: vscode.ExtensionContext): void {
 		);
 		await renderPullRequestComments(arguments_, right);
 	};
-	const workspaceFolderForRepository = (repository: string): vscode.WorkspaceFolder | undefined =>
-		vscode.workspace.workspaceFolders?.find(folder => folder.name === repository || basename(folder.uri.fsPath) === repository);
+	const gitRepositoryForRepository = async (repository: string): Promise<GitRepository | undefined> =>
+		(await ensureGitApi()).repositories.find(candidate => {
+			const remote = candidate.state.remotes.find(remote => remote.name === 'origin');
+			const identity = repositoryFromRemote(remote?.fetchUrl ?? remote?.pushUrl ?? '');
+			return identity?.repository === repository;
+		});
 	const openPullRequestFile = async ({ repository, path }: OpenPullRequestFileArguments): Promise<void> => {
 		const pathSegments = path.split('/').filter(Boolean);
 		if (!path.startsWith('/') || pathSegments.some(segment => segment === '.' || segment === '..')) {
 			throw new Error('Invalid pull request file path.');
 		}
 
-		const workspaceFolder = workspaceFolderForRepository(repository);
-		if (!workspaceFolder) {
+		const gitRepository = await gitRepositoryForRepository(repository);
+		if (!gitRepository) {
 			throw new Error(`Open the ${repository} workspace folder to view this local file.`);
 		}
 
-		const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, ...pathSegments);
+		const fileUri = vscode.Uri.joinPath(gitRepository.rootUri, ...pathSegments);
 		try {
 			await vscode.workspace.fs.stat(fileUri);
 		} catch {
@@ -727,35 +755,25 @@ export function activate(context: vscode.ExtensionContext): void {
 		if (!branchName || branchName.includes('..') || branchName.startsWith('/') || branchName.endsWith('/')) {
 			throw new Error('Invalid pull request branch name.');
 		}
-		const workspaceFolder = workspaceFolderForRepository(repository);
-		if (!workspaceFolder) {
+		const gitRepository = await gitRepositoryForRepository(repository);
+		if (!gitRepository) {
 			throw new Error(`Open the ${repository} workspace folder to check out this branch.`);
 		}
 		try {
-			await execFileAsync('git', ['-C', workspaceFolder.uri.fsPath, 'checkout', branchName]);
+			await gitRepository.checkout(branchName);
 		} catch {
 			try {
-				await execFileAsync('git', [
-					'-C',
-					workspaceFolder.uri.fsPath,
-					'fetch',
-					'origin',
-					`refs/heads/${branchName}:refs/remotes/origin/${branchName}`,
-				]);
-				await execFileAsync('git', [
-					'-C',
-					workspaceFolder.uri.fsPath,
-					'checkout',
-					'--track',
-					`origin/${branchName}`,
-				]);
+				await gitRepository.fetch({
+					remote: 'origin',
+					ref: `refs/heads/${branchName}:refs/remotes/origin/${branchName}`,
+				});
+				await gitRepository.checkout(branchName);
 			} catch (error) {
 				const detail = error instanceof Error ? error.message : 'Git could not check out the branch.';
 				throw new Error(detail);
 			}
 		}
-		const { stdout } = await execFileAsync('git', ['-C', workspaceFolder.uri.fsPath, 'branch', '--show-current']);
-		return stdout.trim();
+		return gitRepository.state.HEAD?.name ?? branchName;
 	};
 	const sharedState = new SharedWorkspaceStateStore(context.workspaceState);
 	context.subscriptions.push(sharedState);
@@ -800,29 +818,76 @@ export function activate(context: vscode.ExtensionContext): void {
 		}
 	};
 	const workspaceRepositories = async (): Promise<WorkspaceRepository[]> => {
-		const folders = vscode.workspace.workspaceFolders ?? [];
-		const repositories = await Promise.all(folders.map(async folder => {
-			try {
-				const { stdout } = await execFileAsync('git', ['-C', folder.uri.fsPath, 'remote', 'get-url', 'origin']);
-				return repositoryFromRemote(stdout.trim());
-			} catch {
-				return undefined;
-			}
-		}));
-		return repositories.filter((repository): repository is WorkspaceRepository => repository !== undefined)
+		return (await ensureGitApi()).repositories.flatMap(repository => {
+			const remote = repository.state.remotes.find(candidate => candidate.name === 'origin');
+			const identity = repositoryFromRemote(remote?.fetchUrl ?? remote?.pushUrl ?? '');
+			return identity ? [{ ...identity, currentBranch: repository.state.HEAD?.name }] : [];
+		})
 			.filter((repository, index, values) => values.findIndex(value => repositoryKey(value) === repositoryKey(repository)) === index);
 	};
 	const workspaceRepositoryContext = async (): Promise<WorkspaceRepositoryContext> => {
-		const folders = vscode.workspace.workspaceFolders ?? [];
-		const activeFolder = vscode.window.activeTextEditor
-			? vscode.workspace.getWorkspaceFolder(vscode.window.activeTextEditor.document.uri)
-			: undefined;
 		const repositories = await workspaceRepositories();
-		const activeRepository = activeFolder
-			? repositories.find(repository => repository.repository === activeFolder.name || repository.repository === basename(activeFolder.uri.fsPath))
+		const activeGitRepository = vscode.window.activeTextEditor
+			? (await ensureGitApi()).getRepository(vscode.window.activeTextEditor.document.uri)
 			: undefined;
+		const activeRemote = activeGitRepository?.state.remotes.find(remote => remote.name === 'origin');
+		const activeIdentity = repositoryFromRemote(activeRemote?.fetchUrl ?? activeRemote?.pushUrl ?? '');
+		const activeRepository = activeIdentity ? { ...activeIdentity, currentBranch: activeGitRepository?.state.HEAD?.name } : undefined;
 		return { repositories, activeRepository };
 	};
+	const gitRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	const publishGitRepositoryChange = async (repository: GitRepository): Promise<void> => {
+		const remote = repository.state.remotes.find(candidate => candidate.name === 'origin');
+		const identity = repositoryFromRemote(remote?.fetchUrl ?? remote?.pushUrl ?? '');
+		if (identity) {
+			await sharedState.set(repositoryRefreshStateKey(identity), {
+				changedAt: Date.now(),
+				currentBranch: repository.state.HEAD?.name,
+			});
+		}
+	};
+	const subscribeToGitRepository = (repository: GitRepository): vscode.Disposable => repository.state.onDidChange(() => {
+		const key = repository.rootUri.toString();
+		clearTimeout(gitRefreshTimers.get(key));
+		gitRefreshTimers.set(key, setTimeout(() => {
+			gitRefreshTimers.delete(key);
+			void publishGitRepositoryChange(repository);
+			refreshOverviewOnGitOpen();
+		}, 250));
+	});
+	const gitExtension = vscode.extensions.getExtension<GitExtension>('vscode.git');
+	let gitApiPromise: Promise<GitApi> | undefined;
+	let refreshOverviewOnGitOpen = () => undefined;
+	const ensureGitApi = (): Promise<GitApi> => {
+		gitApiPromise ??= (async () => {
+			if (!gitExtension) {
+				throw new Error('VS Code\'s built-in Git extension must be enabled to use Azure DevOps PRs (MCP).');
+			}
+			const gitApi = (await gitExtension.activate()).getAPI(1);
+			if (gitApi.state !== 'initialized') {
+				await new Promise<void>(resolve => {
+					const listener = gitApi.onDidChangeState(state => {
+						if (state === 'initialized') {
+							listener.dispose();
+							resolve();
+						}
+					});
+				});
+			}
+			for (const repository of gitApi.repositories) {
+				context.subscriptions.push(subscribeToGitRepository(repository));
+			}
+			context.subscriptions.push(gitApi.onDidOpenRepository((repository: GitRepository) => {
+				context.subscriptions.push(subscribeToGitRepository(repository));
+				refreshOverviewOnGitOpen();
+			}));
+			return gitApi;
+		})();
+		return gitApiPromise;
+	};
+	void ensureGitApi().catch(error => {
+		vscode.window.showWarningMessage(error instanceof Error ? error.message : 'VS Code Git integration is unavailable.');
+	});
 	const refreshOverview = async (): Promise<void> => {
 		const repositories = await workspaceRepositories();
 		const selectedRepository = repositories.find(repository => repositoryKey(repository) === selectedOverviewRepositoryKey) ?? repositories[0];
@@ -866,6 +931,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			const selectedPullRequest = summaries.find(pullRequest => pullRequest.id === selectedOverviewPullRequestId) ?? summaries[0];
 			let review: (Awaited<ReturnType<typeof loadPullRequestReview>> & {
 				sharedState: { key: string; version: number };
+				repositoryState: { key: string; version: number };
 			}) | undefined;
 			if (selectedPullRequest) {
 				selectedOverviewPullRequestId = selectedPullRequest.id;
@@ -877,9 +943,13 @@ export function activate(context: vscode.ExtensionContext): void {
 					getReviewedPaths: reviewState => Promise.resolve(reviewStateStore.getReviewedPaths(reviewState)),
 				});
 				const reviewState = reviewStateStore.getState({ ...selectedRepository, pullRequestId: selectedPullRequest.id });
+				const repositoryState = sharedState.get(repositoryRefreshStateKey(selectedRepository), {});
+				const currentBranch = (await gitRepositoryForRepository(selectedRepository.repository))?.state.HEAD?.name;
 				review = {
 					...loadedReview,
+					currentBranch,
 					sharedState: { key: reviewStateStore.key({ ...selectedRepository, pullRequestId: selectedPullRequest.id }), version: reviewState.version },
+					repositoryState: { key: repositoryRefreshStateKey(selectedRepository), version: repositoryState.version },
 				};
 			}
 			treeRepository = selectedRepository;
@@ -895,6 +965,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			await reviewWebview?.webview.postMessage({ error: treeError });
 		}
 	};
+	refreshOverviewOnGitOpen = () => { void refreshOverview(); };
 	const pullRequestsProvider: vscode.TreeDataProvider<vscode.TreeItem> = {
 		onDidChangeTreeData: treeChanged.event,
 		getTreeItem: item => item,
@@ -966,6 +1037,25 @@ export function activate(context: vscode.ExtensionContext): void {
 								if (!isCheckoutPullRequestBranchArguments(arguments_)) {throw new Error('Invalid pull request branch request.');}
 								result.structuredContent = { currentBranch: await checkoutPullRequestBranch(arguments_) };
 								break;
+							case 'get_pull_request': {
+								if (!isPullRequestReviewStateArguments(arguments_)) {throw new Error('Invalid pull request refresh request.');}
+								const gitApi = await getGitApi(arguments_.organization);
+								const pullRequest = await gitApi.getPullRequest(arguments_.repository, arguments_.pullRequestId, arguments_.project);
+								const loadedReview = await loadPullRequestReview(pullRequest, arguments_, {
+									getGitApi,
+									getCurrentUserId: getAuthenticatedUserId,
+									getReviewedPaths: reviewState => Promise.resolve(reviewStateStore.getReviewedPaths(reviewState)),
+								});
+								const reviewState = reviewStateStore.getState(arguments_);
+								const currentBranch = (await gitRepositoryForRepository(arguments_.repository))?.state.HEAD?.name;
+								result.structuredContent = {
+									...loadedReview,
+									currentBranch,
+									sharedState: { key: reviewStateStore.key(arguments_), version: reviewState.version },
+									repositoryState: { key: repositoryRefreshStateKey(arguments_), version: sharedState.get(repositoryRefreshStateKey(arguments_), {}).version },
+								};
+								break;
+							}
 							case 'set_pull_request_file_reviewed':
 								if (!isPullRequestReviewStateArguments(arguments_) || arguments_.path === undefined || arguments_.reviewed === undefined) {throw new Error('Invalid review state request.');}
 								await reviewStateStore.setFileReviewed({ ...arguments_, path: arguments_.path, reviewed: arguments_.reviewed });
@@ -1010,7 +1100,9 @@ export function activate(context: vscode.ExtensionContext): void {
 								);
 								result.structuredContent = {
 									...loadedReview,
+									currentBranch: (await gitRepositoryForRepository(arguments_.repository))?.state.HEAD?.name,
 									sharedState: { key: reviewStateStore.key({ ...arguments_, pullRequestId: pullRequest.pullRequestId! }), version: reviewStateStore.getState({ ...arguments_, pullRequestId: pullRequest.pullRequestId! }).version },
+									repositoryState: { key: repositoryRefreshStateKey(arguments_), version: sharedState.get(repositoryRefreshStateKey(arguments_), {}).version },
 								};
 								break;
 							}

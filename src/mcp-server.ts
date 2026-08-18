@@ -66,6 +66,18 @@ interface SharedStateWriteResult extends SharedStateSnapshot {
 	applied: boolean;
 }
 
+interface WorkspaceRepository {
+	organization: string;
+	project: string;
+	repository: string;
+	currentBranch?: string;
+}
+
+interface WorkspaceRepositoryContext {
+	repositories: WorkspaceRepository[];
+	activeRepository?: WorkspaceRepository;
+}
+
 interface PullRequestDraftRecord {
 	key: string;
 	organization: string;
@@ -160,6 +172,10 @@ async function checkoutPullRequestBranch(arguments_: CheckoutPullRequestBranchAr
 
 function pullRequestReviewStateKey({ organization, project, repository, pullRequestId }: PullRequestReviewStateArguments): string {
 	return `azure-devops-mcp.reviewed.${organization}.${project}.${repository}.${pullRequestId}`;
+}
+
+function repositoryRefreshStateKey({ organization, project, repository }: PullRequestReviewStateArguments): string {
+	return `azure-devops-mcp.repository.${organization}.${project}.${repository}.changed`;
 }
 
 function pullRequestDraftStateKey({ organization, project, repository, sourceRef, targetRef, title }: {
@@ -296,7 +312,7 @@ async function setPullRequestFileReviewed(arguments_: Required<PullRequestReview
 	}
 }
 
-async function getWorkspaceRepositories(): Promise<unknown> {
+async function getWorkspaceRepositories(): Promise<WorkspaceRepositoryContext> {
 	const response = await fetch(requiredEnvironment('AZURE_DEVOPS_WORKSPACE_CONTEXT_URL'), {
 		method: 'POST',
 		headers: {
@@ -308,7 +324,11 @@ async function getWorkspaceRepositories(): Promise<unknown> {
 	if (!response.ok) {
 		throw new Error((await response.text()) || `Unable to discover workspace repositories (${response.status}).`);
 	}
-	return response.json();
+	const body: unknown = await response.json();
+	if (!body || typeof body !== 'object' || !Array.isArray((body as { repositories?: unknown }).repositories)) {
+		throw new Error('Invalid workspace repository response.');
+	}
+	return body as WorkspaceRepositoryContext;
 }
 
 async function invokeExtensionCommand(urlEnvironment: string, arguments_: object): Promise<void> {
@@ -401,7 +421,20 @@ async function main(): Promise<void> {
 		});
 		const sharedStateKey = pullRequestReviewStateKey({ organization, project, repository, pullRequestId: pullRequest.pullRequestId! });
 		const sharedState = await getSharedState(sharedStateKey, []);
-		const review = { ...loadedReview, sharedState: { key: sharedStateKey, version: sharedState.version } };
+		const repositoryStateKey = repositoryRefreshStateKey({ organization, project, repository, pullRequestId: pullRequest.pullRequestId! });
+		const repositoryState = await getSharedState(repositoryStateKey, {});
+		const workspace = await getWorkspaceRepositories();
+		const currentBranch = (workspace.activeRepository?.organization === organization
+			&& workspace.activeRepository.project === project
+			&& workspace.activeRepository.repository === repository
+			? workspace.activeRepository
+			: workspace.repositories.find(candidate => candidate.organization === organization && candidate.project === project && candidate.repository === repository))?.currentBranch;
+		const review = {
+			...loadedReview,
+			currentBranch,
+			sharedState: { key: sharedStateKey, version: sharedState.version },
+			repositoryState: { key: repositoryStateKey, version: repositoryState.version },
+		};
 		return {
 			content: [{
 				type: 'text' as const,
@@ -435,7 +468,7 @@ async function main(): Promise<void> {
 				{ version: targetCommit, versionType: GitVersionType.Commit },
 				{ version: sourceCommit, versionType: GitVersionType.Commit },
 			);
-			const changeEntries = (changes.changes ?? []).flatMap(change => change.item?.path ? [{
+			const changeEntries = (changes.changes ?? []).flatMap(change => change.item?.path && !change.item.isFolder ? [{
 				path: change.item.path,
 				changeType: change.changeType,
 			}] : []);
