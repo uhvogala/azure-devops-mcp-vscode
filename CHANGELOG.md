@@ -4,6 +4,10 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.54]
+
+- Improve Marketplace discovery with Azure and SCM categories, targeted search keywords, and a clearer extension description.
+
 ## [0.0.53]
 
 - Add one-call workspace Azure DevOps repository discovery for agents.

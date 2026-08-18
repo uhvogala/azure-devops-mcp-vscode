@@ -2,8 +2,8 @@
   "name": "azure-devops-prs-mcp",
   "publisher": "aitostack",
   "displayName": "Azure DevOps PRs (MCP)",
-  "description": "Expose Azure DevOps pull requests to coding agents through MCP",
-  "version": "0.0.53",
+  "description": "Interactive Azure DevOps and Azure Repos pull request review, drafts, and checkout workflows for VS Code agents and GitHub Copilot Chat through MCP.",
+  "version": "0.0.54",
   "icon": "resources/marketplace-icon.png",
   "license": "MIT",
   "repository": {
@@ -18,7 +18,23 @@
     "vscode": "^1.125.0"
   },
   "categories": [
-    "Other"
+    "Azure",
+    "SCM Providers"
+  ],
+  "keywords": [
+    "azure devops",
+    "azure repos",
+    "pull request",
+    "pull request review",
+    "pr review",
+    "code review",
+    "pull request drafts",
+    "mcp",
+    "mcp server",
+    "model context protocol",
+    "github copilot",
+    "copilot chat",
+    "vs code agents"
   ],
   "activationEvents": [
     "onStartupFinished"
