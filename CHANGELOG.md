@@ -4,6 +4,11 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.53]
+
+- Add one-call workspace Azure DevOps repository discovery for agents.
+- Guide agents to use the active workspace repository before repository-scoped pull request tools.
+
 ## [0.0.52]
 
 - Center file-row details and actions in review cards.

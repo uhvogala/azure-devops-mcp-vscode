@@ -30,6 +30,10 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 	test('forwards checkout and reviewed-file actions with their full card parameters', async () => {
 		let diffArguments: object | undefined;
 		let checkoutArguments: CheckoutPullRequestBranchArguments | undefined;
+		const workspaceContext = {
+			repositories: [{ organization: 'example-org', project: 'example-project', repository: 'example-repository' }],
+			activeRepository: { organization: 'example-org', project: 'example-project', repository: 'example-repository' },
+		};
 		const values = new Map<string, unknown>();
 		const sharedState = new SharedWorkspaceStateStore({
 			get: <T>(key: string, defaultValue?: T): T => (values.get(key) as T | undefined) ?? defaultValue as T,
@@ -46,6 +50,7 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 				checkoutArguments = arguments_;
 				return 'feature/example-branch';
 			},
+			async () => workspaceContext,
 			sharedState,
 		);
 
@@ -93,6 +98,14 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 				...identity,
 				branch: 'refs/heads/feature/example-branch',
 			});
+
+			const workspaceResponse = await fetch(environment.AZURE_DEVOPS_WORKSPACE_CONTEXT_URL, {
+				method: 'POST',
+				headers,
+				body: '{}',
+			});
+			assert.strictEqual(workspaceResponse.status, 200);
+			assert.deepStrictEqual(await workspaceResponse.json(), workspaceContext);
 
 			const stateResponse = await fetch(environment.AZURE_DEVOPS_SHARED_STATE_URL, {
 				method: 'POST',

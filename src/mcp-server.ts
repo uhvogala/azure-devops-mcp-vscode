@@ -296,6 +296,21 @@ async function setPullRequestFileReviewed(arguments_: Required<PullRequestReview
 	}
 }
 
+async function getWorkspaceRepositories(): Promise<unknown> {
+	const response = await fetch(requiredEnvironment('AZURE_DEVOPS_WORKSPACE_CONTEXT_URL'), {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${requiredEnvironment('AZURE_DEVOPS_DIFF_COMMAND_TOKEN')}`,
+			'Content-Type': 'application/json',
+		},
+		body: '{}',
+	});
+	if (!response.ok) {
+		throw new Error((await response.text()) || `Unable to discover workspace repositories (${response.status}).`);
+	}
+	return response.json();
+}
+
 async function invokeExtensionCommand(urlEnvironment: string, arguments_: object): Promise<void> {
 	const response = await fetch(requiredEnvironment(urlEnvironment), {
 		method: 'POST',
@@ -317,7 +332,7 @@ async function main(): Promise<void> {
 		{ name: 'azure-devops-pull-requests', version: '0.0.1' },
 		{
 			instructions:
-				'This server manages Azure DevOps pull requests. Whenever the user asks to show, open, view, or review a specific pull request, call get_pull_request immediately (with includeChanges: true, which is the default). Do not ask for confirmation or merely offer to show the card: render the interactive review card, which has approvals, checkout, and file actions. Use list_pull_requests first if you need to find a pull request\'s ID. To draft a new pull request, call create_pull_request, which also renders an interactive card for editing and submitting.',
+				'This server manages Azure DevOps pull requests. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Whenever the user asks to show, open, view, or review a specific pull request, call get_pull_request immediately (with includeChanges: true, which is the default). Do not ask for confirmation or merely offer to show the card: render the interactive review card with approvals, checkout, and file actions. Use list_pull_requests only when the pull request ID is unknown. To draft a new pull request, call create_pull_request, which also renders an interactive card for editing and submitting.',
 		},
 	);
 
@@ -336,6 +351,18 @@ async function main(): Promise<void> {
 				text: await readFile(join(__dirname, 'pr-review-card.html'), 'utf8'),
 			}],
 		}),
+	);
+
+	server.registerTool(
+		'get_workspace_repositories',
+		{
+			description: 'Get Azure DevOps organization, project, and repository values for all repositories in the current VS Code workspace. Use this once when repository identifiers are unknown; activeRepository identifies the active editor repository when available.',
+			inputSchema: z.object({}),
+		},
+		async () => {
+			const context = await getWorkspaceRepositories();
+			return { content: [{ type: 'text', text: JSON.stringify(context, null, 2) }], structuredContent: context };
+		},
 	);
 
 	const getGitApi = async (organization: string) => {

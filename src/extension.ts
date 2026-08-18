@@ -35,6 +35,11 @@ interface WorkspaceRepository {
 	repository: string;
 }
 
+interface WorkspaceRepositoryContext {
+	repositories: WorkspaceRepository[];
+	activeRepository?: WorkspaceRepository;
+}
+
 interface OverviewPullRequest {
 	id: number;
 	title: string;
@@ -457,6 +462,7 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 		private readonly openDiff: (arguments_: OpenPullRequestFileDiffArguments) => Promise<void>,
 		private readonly openFile: (arguments_: OpenPullRequestFileArguments) => Promise<void>,
 		private readonly checkoutBranch: (arguments_: CheckoutPullRequestBranchArguments) => Promise<string>,
+		private readonly getWorkspaceRepositoryContext: () => Promise<WorkspaceRepositoryContext>,
 		private readonly sharedState: SharedWorkspaceStateStore,
 	) {
 	}
@@ -468,6 +474,7 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 			AZURE_DEVOPS_OPEN_FILE_URL: `http://127.0.0.1:${port}/open-pull-request-file`,
 			AZURE_DEVOPS_CHECKOUT_BRANCH_URL: `http://127.0.0.1:${port}/checkout-pull-request-branch`,
 			AZURE_DEVOPS_SHARED_STATE_URL: `http://127.0.0.1:${port}/shared-state`,
+			AZURE_DEVOPS_WORKSPACE_CONTEXT_URL: `http://127.0.0.1:${port}/workspace-repositories`,
 			AZURE_DEVOPS_DIFF_COMMAND_TOKEN: this.token,
 		};
 	}
@@ -521,6 +528,11 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 				const currentBranch = await this.checkoutBranch(arguments_);
 				response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
 					.end(JSON.stringify({ currentBranch }));
+				return;
+			}
+			if (request.url === '/workspace-repositories') {
+				response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+					.end(JSON.stringify(await this.getWorkspaceRepositoryContext()));
 				return;
 			}
 			if (request.url === '/shared-state' && isSharedStateRequest(arguments_)) {
@@ -800,6 +812,17 @@ export function activate(context: vscode.ExtensionContext): void {
 		return repositories.filter((repository): repository is WorkspaceRepository => repository !== undefined)
 			.filter((repository, index, values) => values.findIndex(value => repositoryKey(value) === repositoryKey(repository)) === index);
 	};
+	const workspaceRepositoryContext = async (): Promise<WorkspaceRepositoryContext> => {
+		const folders = vscode.workspace.workspaceFolders ?? [];
+		const activeFolder = vscode.window.activeTextEditor
+			? vscode.workspace.getWorkspaceFolder(vscode.window.activeTextEditor.document.uri)
+			: undefined;
+		const repositories = await workspaceRepositories();
+		const activeRepository = activeFolder
+			? repositories.find(repository => repository.repository === activeFolder.name || repository.repository === basename(activeFolder.uri.fsPath))
+			: undefined;
+		return { repositories, activeRepository };
+	};
 	const refreshOverview = async (): Promise<void> => {
 		const repositories = await workspaceRepositories();
 		const selectedRepository = repositories.find(repository => repositoryKey(repository) === selectedOverviewRepositoryKey) ?? repositories[0];
@@ -1025,6 +1048,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		openPullRequestFileDiff,
 		openPullRequestFile,
 		checkoutPullRequestBranch,
+		workspaceRepositoryContext,
 		sharedState,
 	);
 	context.subscriptions.push(sharedState.onDidChange(change => {
