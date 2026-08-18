@@ -5,6 +5,7 @@ import {
 	PullRequestCommandBridge,
 	PullRequestReviewStateArguments,
 	PullRequestReviewStateStore,
+	SharedWorkspaceStateStore,
 } from '../extension';
 
 
@@ -27,8 +28,13 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 	test('forwards checkout and reviewed-file actions with their full card parameters', async () => {
 		let diffArguments: object | undefined;
 		let checkoutArguments: CheckoutPullRequestBranchArguments | undefined;
-		let reviewArguments: Required<PullRequestReviewStateArguments> | undefined;
-		const reviewedPaths = new Set<string>();
+		const values = new Map<string, unknown>();
+		const sharedState = new SharedWorkspaceStateStore({
+			get: <T>(key: string, defaultValue?: T): T => (values.get(key) as T | undefined) ?? defaultValue as T,
+			update: async (key: string, value: unknown): Promise<void> => {
+				values.set(key, value);
+			},
+		});
 		const bridge = new PullRequestCommandBridge(
 			async arguments_ => {
 				diffArguments = arguments_;
@@ -38,15 +44,7 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 				checkoutArguments = arguments_;
 				return 'feature/example-branch';
 			},
-			() => [...reviewedPaths],
-			async arguments_ => {
-				reviewArguments = arguments_;
-				if (arguments_.reviewed) {
-					reviewedPaths.add(arguments_.path);
-				} else {
-					reviewedPaths.delete(arguments_.path);
-				}
-			},
+			sharedState,
 		);
 
 		try {
@@ -94,26 +92,20 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 				branch: 'refs/heads/feature/example-branch',
 			});
 
-			const reviewResponse = await fetch(environment.AZURE_DEVOPS_REVIEW_STATE_URL, {
+			const stateResponse = await fetch(environment.AZURE_DEVOPS_SHARED_STATE_URL, {
 				method: 'POST',
 				headers,
 				body: JSON.stringify({
-					...identity,
-					pullRequestId: 123,
-					path: '/src/example.ts',
-					reviewed: true,
+					key: 'example.state',
+					value: ['updated'],
+					set: true,
 				}),
 			});
-			assert.strictEqual(reviewResponse.status, 200);
-			assert.deepStrictEqual(reviewArguments, {
-				...identity,
-				pullRequestId: 123,
-				path: '/src/example.ts',
-				reviewed: true,
-			});
-			assert.deepStrictEqual(await reviewResponse.json(), { reviewedPaths: ['/src/example.ts'] });
+			assert.strictEqual(stateResponse.status, 200);
+			assert.deepStrictEqual(await stateResponse.json(), { value: ['updated'], version: 1, applied: true });
 		} finally {
 			bridge.dispose();
+			sharedState.dispose();
 		}
 	});
 
@@ -143,5 +135,21 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			'/scripts/setup.ts',
 			'/src/example.ts',
 		]);
+	});
+
+	test('notifies shared state subscribers with an incremented revision', async () => {
+		const values = new Map<string, unknown>();
+		const store = new SharedWorkspaceStateStore({
+			get: <T>(key: string, defaultValue?: T): T => (values.get(key) as T | undefined) ?? defaultValue as T,
+			update: async (key: string, value: unknown): Promise<void> => {
+				values.set(key, value);
+			},
+		});
+		const wait = store.waitForChange('example.state', 0, [] as string[], 1_000);
+
+		await store.set('example.state', ['updated']);
+
+		assert.deepStrictEqual(await wait, { value: ['updated'], version: 1 });
+		store.dispose();
 	});
 });

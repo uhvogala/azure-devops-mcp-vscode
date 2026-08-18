@@ -7,11 +7,21 @@ function element(name, className) {
 	return node;
 }
 
-function changeLabel(changeType) {
+export function changeLabel(changeType) {
 	if ((changeType & 1) !== 0) {return 'Added';}
 	if ((changeType & 16) !== 0) {return 'Deleted';}
 	if ((changeType & 8) !== 0) {return 'Renamed';}
 	return 'Modified';
+}
+
+export function applyReviewedPaths(review, value) {
+	if (!Array.isArray(value)) {
+		return;
+	}
+	const reviewedPaths = new Set(value.filter(path => typeof path === 'string'));
+	for (const change of review.changes) {
+		change.reviewed = reviewedPaths.has(change.path);
+	}
 }
 
 function voteLabel(reviewer) {

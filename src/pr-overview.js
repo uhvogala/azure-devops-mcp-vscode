@@ -1,10 +1,11 @@
-import { renderPullRequestReview } from './pull-request-review-ui';
+import { applyReviewedPaths, renderPullRequestReview } from './pull-request-review-ui';
 
 const vscode = acquireVsCodeApi();
 const root = document.createElement('main');
 root.className = 'review-host';
 document.body.append(root);
 const pendingActions = new Map();
+let review;
 
 function callHostAction(request) {
 	const id = crypto.randomUUID();
@@ -18,8 +19,19 @@ window.addEventListener('message', event => {
 		pendingActions.delete(event.data.id);
 		return;
 	}
+	if (event.data.type === 'sharedStateChanged') {
+		const change = event.data.change;
+		if (review?.sharedState?.key !== change?.key || !Array.isArray(change.value)) {
+			return;
+		}
+		review.sharedState.version = change.version;
+		applyReviewedPaths(review, change.value);
+		renderPullRequestReview(root, review, callHostAction);
+		return;
+	}
 	if (event.data.review) {
-		renderPullRequestReview(root, event.data.review, callHostAction);
+		review = event.data.review;
+		renderPullRequestReview(root, review, callHostAction);
 		return;
 	}
 	root.textContent = event.data.error || 'Select a pull request to review.';

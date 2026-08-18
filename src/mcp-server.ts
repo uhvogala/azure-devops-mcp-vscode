@@ -20,7 +20,6 @@ const repositorySchema = {
 	repository: z.string().min(1).describe('Git repository name or ID.'),
 };
 
-const openPullRequestFileDiffCommand = 'azure-devops-mcp.openPullRequestFileDiff';
 const pullRequestReviewCardUri = 'ui://azure-devops/pull-request-review.html';
 
 interface OpenPullRequestFileDiffArguments {
@@ -56,6 +55,15 @@ interface PullRequestReviewStateArguments {
 	pullRequestId: number;
 	path?: string;
 	reviewed?: boolean;
+}
+
+interface SharedStateSnapshot {
+	value: unknown;
+	version: number;
+}
+
+interface SharedStateWriteResult extends SharedStateSnapshot {
+	applied: boolean;
 }
 
 function requiredEnvironment(name: string): string {
@@ -106,11 +114,6 @@ function pullRequestCommentSummary(thread: GitPullRequestCommentThread): Record<
 	};
 }
 
-function openPullRequestFileDiffLink(arguments_: OpenPullRequestFileDiffArguments): string {
-	const commandArguments = encodeURIComponent(JSON.stringify([arguments_]));
-	return `[Open diff](command:${openPullRequestFileDiffCommand}?${commandArguments})`;
-}
-
 async function openPullRequestFileDiff(arguments_: OpenPullRequestFileDiffArguments): Promise<void> {
 	await invokeExtensionCommand('AZURE_DEVOPS_DIFF_COMMAND_URL', arguments_);
 }
@@ -138,27 +141,101 @@ async function checkoutPullRequestBranch(arguments_: CheckoutPullRequestBranchAr
 	return (body as { currentBranch: string }).currentBranch;
 }
 
+function pullRequestReviewStateKey({ organization, project, repository, pullRequestId }: PullRequestReviewStateArguments): string {
+	return `azure-devops-mcp.reviewed.${organization}.${project}.${repository}.${pullRequestId}`;
+}
+
+function pullRequestDraftStateKey({ organization, project, repository, sourceRef, targetRef, title }: {
+	organization: string;
+	project: string;
+	repository: string;
+	sourceRef: string;
+	targetRef: string;
+	title: string;
+}): string {
+	return `azure-devops-mcp.draft.${[organization, project, repository, sourceRef, targetRef, title].map(encodeURIComponent).join('.')}`;
+}
+
+function reviewedPaths(value: unknown): readonly string[] {
+	return Array.isArray(value) ? value.filter((path): path is string => typeof path === 'string') : [];
+}
+
 async function getPullRequestReviewState(arguments_: PullRequestReviewStateArguments): Promise<readonly string[]> {
-	const response = await fetch(requiredEnvironment('AZURE_DEVOPS_REVIEW_STATE_URL'), {
+	const state = await getSharedState(pullRequestReviewStateKey(arguments_), []);
+	return reviewedPaths(state.value);
+}
+
+async function getSharedState(key: string, defaultValue: unknown, wait = false, afterVersion = 0): Promise<SharedStateSnapshot> {
+	const response = await fetch(requiredEnvironment('AZURE_DEVOPS_SHARED_STATE_URL'), {
 		method: 'POST',
 		headers: {
 			Authorization: `Bearer ${requiredEnvironment('AZURE_DEVOPS_DIFF_COMMAND_TOKEN')}`,
 			'Content-Type': 'application/json',
 		},
-		body: JSON.stringify(arguments_),
+		body: JSON.stringify({ key, defaultValue, wait, afterVersion }),
 	});
 	if (!response.ok) {
-		throw new Error((await response.text()) || `Unable to load review state (${response.status}).`);
+		throw new Error((await response.text()) || `Unable to read shared state (${response.status}).`);
 	}
 	const body: unknown = await response.json();
-	if (!body || typeof body !== 'object' || !Array.isArray((body as { reviewedPaths?: unknown }).reviewedPaths)) {
-		throw new Error('Invalid pull request review state response.');
+	if (!body || typeof body !== 'object' || typeof (body as { version?: unknown }).version !== 'number') {
+		throw new Error('Invalid shared state response.');
 	}
-	return (body as { reviewedPaths: unknown[] }).reviewedPaths.filter((path): path is string => typeof path === 'string');
+	return body as SharedStateSnapshot;
+}
+
+async function setSharedState(key: string, value: unknown, expectedVersion?: number): Promise<SharedStateWriteResult> {
+	const response = await fetch(requiredEnvironment('AZURE_DEVOPS_SHARED_STATE_URL'), {
+		method: 'POST',
+		headers: {
+			Authorization: `Bearer ${requiredEnvironment('AZURE_DEVOPS_DIFF_COMMAND_TOKEN')}`,
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify({ key, value, set: true, expectedVersion }),
+	});
+	if (!response.ok) {
+		throw new Error((await response.text()) || `Unable to update shared state (${response.status}).`);
+	}
+	const body: unknown = await response.json();
+	if (!body || typeof body !== 'object'
+		|| typeof (body as { version?: unknown }).version !== 'number'
+		|| typeof (body as { applied?: unknown }).applied !== 'boolean') {
+		throw new Error('Invalid shared state response.');
+	}
+	return body as SharedStateWriteResult;
+}
+
+function draftDescription(value: unknown, fallback: string): string {
+	if (!value || typeof value !== 'object' || typeof (value as { description?: unknown }).description !== 'string') {
+		return fallback;
+	}
+	return (value as { description: string }).description;
+}
+
+async function initializePullRequestDraftState(key: string, description: string): Promise<SharedStateSnapshot> {
+	const state = await getSharedState(key, { description });
+	if (state.version > 0) {
+		return state;
+	}
+	const result = await setSharedState(key, { description }, 0);
+	return result.applied ? result : getSharedState(key, { description });
 }
 
 async function setPullRequestFileReviewed(arguments_: Required<PullRequestReviewStateArguments>): Promise<void> {
-	await getPullRequestReviewState(arguments_);
+	const key = pullRequestReviewStateKey(arguments_);
+	for (;;) {
+		const state = await getSharedState(key, []);
+		const paths = new Set(reviewedPaths(state.value));
+		if (arguments_.reviewed) {
+			paths.add(arguments_.path);
+		} else {
+			paths.delete(arguments_.path);
+		}
+		const result = await setSharedState(key, [...paths].sort(), state.version);
+		if (result.applied) {
+			return;
+		}
+	}
 }
 
 async function invokeExtensionCommand(urlEnvironment: string, arguments_: object): Promise<void> {
@@ -182,7 +259,7 @@ async function main(): Promise<void> {
 		{ name: 'azure-devops-pull-requests', version: '0.0.1' },
 		{
 			instructions:
-				'This server manages Azure DevOps pull requests. Whenever the user asks to show, open, view, or review a specific pull request, call get_pull_request (with includeChanges: true, which is the default) instead of only reporting text — it renders an interactive review card with approvals, checkout, and file actions. Use list_pull_requests first if you need to find a pull request\'s ID. To draft a new pull request, call create_pull_request, which also renders an interactive card for editing and submitting.',
+				'This server manages Azure DevOps pull requests. Whenever the user asks to show, open, view, or review a specific pull request, call get_pull_request immediately (with includeChanges: true, which is the default). Do not ask for confirmation or merely offer to show the card: render the interactive review card, which has approvals, checkout, and file actions. Use list_pull_requests first if you need to find a pull request\'s ID. To draft a new pull request, call create_pull_request, which also renders an interactive card for editing and submitting.',
 		},
 	);
 
@@ -232,11 +309,14 @@ async function main(): Promise<void> {
 		project: string,
 		repository: string,
 	) => {
-		const review = await loadPullRequestReview(pullRequest, { organization, project, repository }, {
+		const loadedReview = await loadPullRequestReview(pullRequest, { organization, project, repository }, {
 			getGitApi,
 			getCurrentUserId: getAuthenticatedUserId,
 			getReviewedPaths: getPullRequestReviewState,
 		});
+		const sharedStateKey = pullRequestReviewStateKey({ organization, project, repository, pullRequestId: pullRequest.pullRequestId! });
+		const sharedState = await getSharedState(sharedStateKey, []);
+		const review = { ...loadedReview, sharedState: { key: sharedStateKey, version: sharedState.version } };
 		return {
 			content: [{
 				type: 'text' as const,
@@ -456,9 +536,59 @@ async function main(): Promise<void> {
 	);
 
 	server.registerTool(
+		'get_shared_state',
+		{
+			description: 'Read a value from the extension shared state store. Reserved for MCP Apps.',
+			inputSchema: z.object({
+				key: z.string().min(1),
+				defaultValue: z.unknown().optional(),
+			}),
+			_meta: { ui: { visibility: ['app'] }, 'ui/visibility': ['app'] },
+		},
+		async ({ key, defaultValue }) => {
+			const state = await getSharedState(key, defaultValue ?? null);
+			return { content: [{ type: 'text', text: JSON.stringify(state) }], structuredContent: state };
+		},
+	);
+
+	server.registerTool(
+		'wait_for_shared_state',
+		{
+			description: 'Wait for a newer version of a shared state value. Reserved for MCP Apps.',
+			inputSchema: z.object({
+				key: z.string().min(1),
+				afterVersion: z.number().int().nonnegative(),
+				defaultValue: z.unknown().optional(),
+			}),
+			_meta: { ui: { visibility: ['app'] }, 'ui/visibility': ['app'] },
+		},
+		async ({ key, afterVersion, defaultValue }) => {
+			const state = await getSharedState(key, defaultValue ?? null, true, afterVersion);
+			return { content: [{ type: 'text', text: JSON.stringify(state) }], structuredContent: state };
+		},
+	);
+
+	server.registerTool(
+		'set_shared_state',
+		{
+			description: 'Write a value to the extension shared state store and notify subscribers. Reserved for MCP Apps.',
+			inputSchema: z.object({
+				key: z.string().min(1),
+				value: z.unknown(),
+				expectedVersion: z.number().int().nonnegative().optional(),
+			}),
+			_meta: { ui: { visibility: ['app'] }, 'ui/visibility': ['app'] },
+		},
+		async ({ key, value, expectedVersion }) => {
+			const state = await setSharedState(key, value, expectedVersion);
+			return { content: [{ type: 'text', text: JSON.stringify(state) }], structuredContent: state };
+		},
+	);
+
+	server.registerTool(
 		'get_pull_request',
 		{
-			description: 'Show an Azure DevOps pull request by ID as an interactive review card with approvals, checkout, and file actions. Call this whenever the user asks to show, open, view, or review a specific pull request.',
+			description: 'Show an Azure DevOps pull request by ID as an interactive review card with approvals, checkout, and file actions. Call this immediately whenever the user asks to show, open, view, or review a specific pull request; do not ask for confirmation or merely describe the card.',
 			inputSchema: z.object({
 				...repositorySchema,
 				pullRequestId: z.number().int().positive(),
@@ -563,16 +693,19 @@ async function main(): Promise<void> {
 		},
 		async ({ organization, project, repository, sourceRef, targetRef, title, description, reviewerIds }) => {
 			const changedFiles = await pullRequestDraftChanges(organization, project, repository, sourceRef, targetRef);
+			const draftStateKey = pullRequestDraftStateKey({ organization, project, repository, sourceRef, targetRef, title });
+			const draftState = await initializePullRequestDraftState(draftStateKey, description ?? '');
 			const draft = {
 				mode: 'create',
 				sourceRefName: sourceRef,
 				targetRefName: targetRef,
 				title,
-				description: description ?? '',
+				description: draftDescription(draftState.value, description ?? ''),
 				reviewerIds: reviewerIds ?? [],
 				organization,
 				project,
 				repository,
+				sharedState: { key: draftStateKey, version: draftState.version },
 				...changedFiles,
 			};
 			return {

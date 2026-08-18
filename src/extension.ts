@@ -56,51 +56,6 @@ function repositoryKey(repository: WorkspaceRepository): string {
 	return `${repository.organization}/${repository.project}/${repository.repository}`;
 }
 
-function overviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
-	const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'pr-overview.js'));
-	const nonce = randomBytes(16).toString('hex');
-	return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
-<style>
-:root { color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
-html, body { height: 100%; } body { margin: 0; } main { display: grid; height: 100vh; overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
-.toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px; border-bottom: 1px solid var(--vscode-panel-border); }
-select, button { min-height: 28px; box-sizing: border-box; font: inherit; } select { width: 100%; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border); }
-button { border: 1px solid var(--vscode-button-border, transparent); background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; } button:hover { background: var(--vscode-button-hoverBackground); }
-.content { min-width: 0; overflow: hidden; } .empty, .error { padding: 14px; color: var(--vscode-descriptionForeground); } .error { color: var(--vscode-errorForeground); }
-.pr-list { margin: 0; padding: 0; list-style: none; } .pr { width: 100%; padding: 10px; border: 0; border-bottom: 1px solid var(--vscode-panel-border); background: transparent; color: inherit; text-align: left; } .pr[aria-selected="true"] { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
-.pr-title { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .pr-meta { display: block; margin-top: 3px; color: var(--vscode-descriptionForeground); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.review { padding: 12px; } .review-header { display: flex; justify-content: space-between; gap: 8px; } h2 { margin: 0; font-size: 15px; line-height: 1.35; } .number, .meta, .files span { color: var(--vscode-descriptionForeground); font-size: 11px; } .branches { margin: 10px 0; padding: 8px; border-left: 3px solid var(--vscode-focusBorder); background: var(--vscode-editorWidget-background); overflow-wrap: anywhere; }
-.description { line-height: 1.45; white-space: pre-wrap; } .files { margin-top: 14px; border: 1px solid var(--vscode-panel-border); } .files h3 { margin: 0; padding: 8px; font-size: 12px; } .file { display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-top: 1px solid var(--vscode-panel-border); background: transparent; color: inherit; text-align: left; } .file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.loading { padding: 22px; color: var(--vscode-descriptionForeground); text-align: center; }
-.content { display: grid; grid-template-rows: minmax(92px, 34%) minmax(0, 1fr); } .pr-picker { min-height: 0; overflow: auto; border-bottom: 1px solid var(--vscode-panel-border); } .pr-picker > h2 { position: sticky; top: 0; z-index: 1; padding: 8px 10px; background: var(--vscode-editorWidget-background); color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: uppercase; } .pr-picker .empty { padding: 10px; } .review-host { min-height: 0; overflow: auto; }
-.review-host { padding: 12px; } .review-host.is-loading { opacity: .65; pointer-events: none; } .header, .files-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; } h1, h2, h3 { margin: 0; } h1 { font-size: 15px; line-height: 1.35; } h2, h3 { font-size: 12px; } .number, .files-header span, .file-details span, .approvals-count, .reviewer-vote { color: var(--vscode-descriptionForeground); font-size: 11px; } .status { padding: 3px 6px; background: var(--vscode-testing-iconPassed); color: var(--vscode-editor-background); font-size: 10px; font-weight: 700; text-transform: uppercase; } .branches { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 10px; padding: 8px; border-left: 3px solid var(--vscode-focusBorder); background: var(--vscode-editorWidget-background); overflow-wrap: anywhere; } .branch-actions, .file-actions { display: flex; gap: 6px; flex-wrap: wrap; } .approval-actions { display: flex; gap: 6px; margin-top: 8px; } .review-host button { border: 1px solid var(--vscode-button-border, transparent); padding: 5px 8px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; } .review-host button:hover { background: var(--vscode-button-hoverBackground); } .checkout-branch, .open-file { background: var(--vscode-button-secondaryBackground) !important; color: var(--vscode-button-secondaryForeground) !important; } .branch-error, .approval-error, .action-error { color: var(--vscode-errorForeground); font-size: 11px; overflow-wrap: anywhere; } .approvals, .summary, .files { margin-top: 14px; } .approvals-header, .reviewer { display: flex; justify-content: space-between; gap: 8px; } .approval-list { display: grid; gap: 4px; margin-top: 7px; } .reviewer { padding: 6px 8px; border-left: 3px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background); font-size: 12px; } .reviewer-name { overflow-wrap: anywhere; } .summary .section-title { margin-bottom: 7px; color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: uppercase; } .markdown { line-height: 1.45; } .markdown p { margin: 0 0 8px; } .markdown code, code { font-family: var(--vscode-editor-font-family); } .files { border: 1px solid var(--vscode-panel-border); } .files-header { padding: 8px; background: var(--vscode-editorWidget-background); } .file { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 8px; border-top: 1px solid var(--vscode-panel-border); } .file-details { min-width: 0; display: grid; gap: 3px; } .file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .review-control { display: inline-flex; align-items: center; gap: 4px; color: var(--vscode-descriptionForeground); font-size: 11px; } .comment-count { min-height: auto !important; justify-self: start; padding: 0 !important; border: 0 !important; background: transparent !important; color: var(--vscode-textLink-foreground) !important; font-size: 11px !important; text-decoration: underline; } @media (max-width: 420px) { .file { grid-template-columns: 82px minmax(0, 1fr); } .file-actions { grid-column: 2; } .branches { grid-template-columns: 1fr; } .branch-actions { justify-content: flex-start; } }
-.review-host button { border-radius: var(--vscode-button-border-radius, 4px); }
-.review-host .branches { grid-template-columns: minmax(0, 1fr); margin-bottom: 16px; }
-.review-host .branch-actions { grid-column: 1; justify-content: flex-start; }
-.review-host .branch-error { grid-column: 1; }
-.review-host .approvals { margin-top: 0; }
-.review-host .approval-actions { margin-top: 12px; }
-.review-host .file { grid-template-columns: 72px minmax(110px, 1fr) auto; }
-.review-host .file-actions { grid-column: auto; flex-wrap: nowrap; }
-@media (max-width: 500px) { .review-host .file { grid-template-columns: 72px minmax(0, 1fr); } .review-host .file-actions { grid-column: 2; flex-wrap: wrap; } }
-/* The review view is narrower than the chat card; reset legacy card rules here. */
-.review-host, .review-host *, .review-host *::before, .review-host *::after { box-sizing: border-box; }
-.review-host { width: 100%; max-width: none; padding: 12px; overflow-x: hidden; }
-.review-host .header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
-.review-host .branches { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; margin: 10px 0 0; }
-.review-host .branch-actions { display: flex; width: 100%; margin-top: 8px; }
-.review-host .approvals { display: block; clear: both; width: 100%; margin-top: 16px; }
-.review-host .approval-actions { display: flex; width: 100%; }
-.review-host .files { width: 100%; overflow: hidden; }
-.review-host .file { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; width: 100%; margin: 0; border: 0; border-top: 1px solid var(--vscode-panel-border); }
-.review-host .file-actions { display: flex; align-items: start; justify-content: flex-end; min-width: 0; }
-.review-host .file-actions button { flex: 0 1 auto; min-width: 0; }
-@media (max-width: 560px) { .review-host .file { grid-template-columns: 72px minmax(0, 1fr); } .review-host .file-actions { grid-column: 2; justify-content: flex-start; margin-top: 4px; } }
-</style></head><body><script nonce="${nonce}" src="${scriptUri}"></script></body></html>`;
-}
-
 function reviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 	const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'pr-overview.js'));
 	const nonce = randomBytes(16).toString('hex');
@@ -173,36 +128,71 @@ export interface PullRequestReviewStateArguments {
 	reviewed?: boolean;
 }
 
+interface SharedStateRequest {
+	key: string;
+	afterVersion?: number;
+	expectedVersion?: number;
+	wait?: boolean;
+	defaultValue?: unknown;
+	value?: unknown;
+	set?: boolean;
+}
+
 interface ReviewStateStorage {
 	get<T>(section: string, defaultValue?: T): T;
 	update(section: string, value: unknown): Thenable<void>;
 }
 
-export class PullRequestReviewStateStore {
+export interface SharedStateSnapshot<T> {
+	value: T;
+	version: number;
+}
+
+export interface SharedStateChange extends SharedStateSnapshot<unknown> {
+	key: string;
+}
+
+export interface SharedStateWriteResult<T> {
+	applied: boolean;
+	snapshot: SharedStateSnapshot<T>;
+}
+
+export class SharedWorkspaceStateStore implements vscode.Disposable {
 	private readonly updates = new Map<string, Promise<void>>();
+	private readonly changed = new vscode.EventEmitter<SharedStateChange>();
+
+	public readonly onDidChange = this.changed.event;
 
 	public constructor(private readonly storage: ReviewStateStorage) {
 	}
 
-	public getReviewedPaths(arguments_: PullRequestReviewStateArguments): readonly string[] {
-		return this.storage.get<readonly string[]>(this.key(arguments_), []);
+	public get<T>(key: string, defaultValue: T): SharedStateSnapshot<T> {
+		return {
+			value: this.storage.get<T>(key, defaultValue),
+			version: this.storage.get<number>(this.versionKey(key), 0),
+		};
 	}
 
-	public async setFileReviewed({ path, reviewed, ...review }: Required<PullRequestReviewStateArguments>): Promise<void> {
-		const key = this.key(review);
+	public async set<T>(key: string, value: T): Promise<SharedStateSnapshot<T>> {
+		return this.update(key, value, () => value);
+	}
+
+	public async update<T>(key: string, defaultValue: T, transform: (currentValue: T) => T): Promise<SharedStateSnapshot<T>> {
 		const previousUpdate = this.updates.get(key) ?? Promise.resolve();
+		let snapshot: SharedStateSnapshot<T> | undefined;
 		const update = previousUpdate.catch(() => undefined).then(async () => {
-			const reviewedPaths = new Set(this.getReviewedPaths(review));
-			if (reviewed) {
-				reviewedPaths.add(path);
-			} else {
-				reviewedPaths.delete(path);
-			}
-			await this.storage.update(key, [...reviewedPaths].sort());
+			const current = this.get(key, defaultValue);
+			const value = transform(current.value);
+			const version = current.version + 1;
+			await this.storage.update(key, value);
+			await this.storage.update(this.versionKey(key), version);
+			snapshot = { value, version };
+			this.changed.fire({ key, ...snapshot });
 		});
 		this.updates.set(key, update);
 		try {
 			await update;
+			return snapshot!;
 		} finally {
 			if (this.updates.get(key) === update) {
 				this.updates.delete(key);
@@ -210,7 +200,90 @@ export class PullRequestReviewStateStore {
 		}
 	}
 
-	private key({ organization, project, repository, pullRequestId }: PullRequestReviewStateArguments): string {
+	public async compareAndSet<T>(key: string, defaultValue: T, expectedVersion: number, value: T): Promise<SharedStateWriteResult<T>> {
+		const previousUpdate = this.updates.get(key) ?? Promise.resolve();
+		let result: SharedStateWriteResult<T> | undefined;
+		const update = previousUpdate.catch(() => undefined).then(async () => {
+			const current = this.get(key, defaultValue);
+			if (current.version !== expectedVersion) {
+				result = { applied: false, snapshot: current };
+				return;
+			}
+			const snapshot = { value, version: current.version + 1 };
+			await this.storage.update(key, value);
+			await this.storage.update(this.versionKey(key), snapshot.version);
+			this.changed.fire({ key, ...snapshot });
+			result = { applied: true, snapshot };
+		});
+		this.updates.set(key, update);
+		try {
+			await update;
+			return result!;
+		} finally {
+			if (this.updates.get(key) === update) {
+				this.updates.delete(key);
+			}
+		}
+	}
+
+	public async waitForChange<T>(key: string, afterVersion: number, defaultValue: T, timeoutMs = 25_000): Promise<SharedStateSnapshot<T>> {
+		const current = this.get(key, defaultValue);
+		if (current.version > afterVersion) {
+			return current;
+		}
+		return new Promise(resolve => {
+			const listener = this.onDidChange(change => {
+				if (change.key !== key || change.version <= afterVersion) {
+					return;
+				}
+				clearTimeout(timeout);
+				listener.dispose();
+				resolve({ value: change.value as T, version: change.version });
+			});
+			const timeout = setTimeout(() => {
+				listener.dispose();
+				resolve(this.get(key, defaultValue));
+			}, timeoutMs);
+		});
+	}
+
+	public dispose(): void {
+		this.changed.dispose();
+	}
+
+	private versionKey(key: string): string {
+		return `${key}.version`;
+	}
+}
+
+export class PullRequestReviewStateStore {
+	private readonly state: SharedWorkspaceStateStore;
+
+	public constructor(storage: ReviewStateStorage | SharedWorkspaceStateStore) {
+		this.state = storage instanceof SharedWorkspaceStateStore ? storage : new SharedWorkspaceStateStore(storage);
+	}
+
+	public getReviewedPaths(arguments_: PullRequestReviewStateArguments): readonly string[] {
+		return this.getState(arguments_).value;
+	}
+
+	public getState(arguments_: PullRequestReviewStateArguments): SharedStateSnapshot<readonly string[]> {
+		return this.state.get(this.key(arguments_), []);
+	}
+
+	public async setFileReviewed({ path, reviewed, ...review }: Required<PullRequestReviewStateArguments>): Promise<void> {
+		await this.state.update(this.key(review), [] as string[], currentPaths => {
+			const reviewedPaths = new Set(currentPaths);
+			if (reviewed) {
+				reviewedPaths.add(path);
+			} else {
+				reviewedPaths.delete(path);
+			}
+			return [...reviewedPaths].sort();
+		});
+	}
+
+	public key({ organization, project, repository, pullRequestId }: PullRequestReviewStateArguments): string {
 		return `azure-devops-mcp.reviewed.${organization}.${project}.${repository}.${pullRequestId}`;
 	}
 }
@@ -232,6 +305,19 @@ function isOpenPullRequestFileDiffArguments(value: unknown): value is OpenPullRe
 		&& typeof arguments_.pullRequestId === 'number'
 		&& typeof arguments_.changeType === 'number'
 		&& (arguments_.originalPath === undefined || typeof arguments_.originalPath === 'string');
+}
+
+function isSharedStateRequest(value: unknown): value is SharedStateRequest {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const request = value as Record<string, unknown>;
+	return typeof request.key === 'string'
+		&& request.key.length > 0
+		&& (request.afterVersion === undefined || (typeof request.afterVersion === 'number' && Number.isInteger(request.afterVersion) && request.afterVersion >= 0))
+		&& (request.expectedVersion === undefined || (typeof request.expectedVersion === 'number' && Number.isInteger(request.expectedVersion) && request.expectedVersion >= 0))
+		&& (request.wait === undefined || typeof request.wait === 'boolean')
+		&& (request.set === undefined || typeof request.set === 'boolean');
 }
 
 function isOpenPullRequestFileArguments(value: unknown): value is OpenPullRequestFileArguments {
@@ -333,8 +419,7 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 		private readonly openDiff: (arguments_: OpenPullRequestFileDiffArguments) => Promise<void>,
 		private readonly openFile: (arguments_: OpenPullRequestFileArguments) => Promise<void>,
 		private readonly checkoutBranch: (arguments_: CheckoutPullRequestBranchArguments) => Promise<string>,
-		private readonly getReviewedPaths: (arguments_: PullRequestReviewStateArguments) => readonly string[],
-		private readonly setFileReviewed: (arguments_: Required<PullRequestReviewStateArguments>) => Promise<void>,
+		private readonly sharedState: SharedWorkspaceStateStore,
 	) {
 	}
 
@@ -344,7 +429,7 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 			AZURE_DEVOPS_DIFF_COMMAND_URL: `http://127.0.0.1:${port}/open-pull-request-file-diff`,
 			AZURE_DEVOPS_OPEN_FILE_URL: `http://127.0.0.1:${port}/open-pull-request-file`,
 			AZURE_DEVOPS_CHECKOUT_BRANCH_URL: `http://127.0.0.1:${port}/checkout-pull-request-branch`,
-			AZURE_DEVOPS_REVIEW_STATE_URL: `http://127.0.0.1:${port}/pull-request-review-state`,
+			AZURE_DEVOPS_SHARED_STATE_URL: `http://127.0.0.1:${port}/shared-state`,
 			AZURE_DEVOPS_DIFF_COMMAND_TOKEN: this.token,
 		};
 	}
@@ -400,12 +485,17 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 					.end(JSON.stringify({ currentBranch }));
 				return;
 			}
-			if (request.url === '/pull-request-review-state' && isPullRequestReviewStateArguments(arguments_)) {
-				if (arguments_.path !== undefined && arguments_.reviewed !== undefined) {
-					await this.setFileReviewed({ ...arguments_, path: arguments_.path, reviewed: arguments_.reviewed });
-				}
+			if (request.url === '/shared-state' && isSharedStateRequest(arguments_)) {
+				const defaultValue = arguments_.defaultValue ?? null;
+				const snapshot = arguments_.set
+					? arguments_.expectedVersion === undefined
+						? { applied: true, snapshot: await this.sharedState.set(arguments_.key, arguments_.value ?? null) }
+						: await this.sharedState.compareAndSet(arguments_.key, defaultValue, arguments_.expectedVersion, arguments_.value ?? null)
+					: arguments_.wait
+					? await this.sharedState.waitForChange(arguments_.key, arguments_.afterVersion ?? 0, defaultValue)
+					: this.sharedState.get(arguments_.key, defaultValue);
 				response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
-					.end(JSON.stringify({ reviewedPaths: this.getReviewedPaths(arguments_) }));
+					.end(JSON.stringify('snapshot' in snapshot ? { ...snapshot.snapshot, applied: snapshot.applied } : snapshot));
 				return;
 			}
 
@@ -552,15 +642,15 @@ export function activate(context: vscode.ExtensionContext): void {
 		);
 		await renderPullRequestComments(arguments_, right);
 	};
+	const workspaceFolderForRepository = (repository: string): vscode.WorkspaceFolder | undefined =>
+		vscode.workspace.workspaceFolders?.find(folder => folder.name === repository || basename(folder.uri.fsPath) === repository);
 	const openPullRequestFile = async ({ repository, path }: OpenPullRequestFileArguments): Promise<void> => {
 		const pathSegments = path.split('/').filter(Boolean);
 		if (!path.startsWith('/') || pathSegments.some(segment => segment === '.' || segment === '..')) {
 			throw new Error('Invalid pull request file path.');
 		}
 
-		const workspaceFolder = vscode.workspace.workspaceFolders?.find(folder =>
-			folder.name === repository || basename(folder.uri.fsPath) === repository,
-		);
+		const workspaceFolder = workspaceFolderForRepository(repository);
 		if (!workspaceFolder) {
 			throw new Error(`Open the ${repository} workspace folder to view this local file.`);
 		}
@@ -579,8 +669,6 @@ export function activate(context: vscode.ExtensionContext): void {
 			await setPrDocumentContext(isPrDocument);
 		}
 	};
-	const workspaceFolderForRepository = (repository: string): vscode.WorkspaceFolder | undefined =>
-		vscode.workspace.workspaceFolders?.find(folder => folder.name === repository || basename(folder.uri.fsPath) === repository);
 	const checkoutPullRequestBranch = async ({ repository, branch }: CheckoutPullRequestBranchArguments): Promise<string> => {
 		if (!branch.startsWith('refs/heads/')) {
 			throw new Error('Only pull request branch refs can be checked out.');
@@ -619,7 +707,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		const { stdout } = await execFileAsync('git', ['-C', workspaceFolder.uri.fsPath, 'branch', '--show-current']);
 		return stdout.trim();
 	};
-	const reviewStateStore = new PullRequestReviewStateStore(context.workspaceState);
+	const sharedState = new SharedWorkspaceStateStore(context.workspaceState);
+	context.subscriptions.push(sharedState);
+	const reviewStateStore = new PullRequestReviewStateStore(sharedState);
 	let reviewWebview: vscode.WebviewView | undefined;
 	let selectedOverviewRepositoryKey = context.workspaceState.get<string>('azure-devops-mcp.overview.repository');
 	let selectedOverviewPullRequestId: number | undefined;
@@ -681,16 +771,23 @@ export function activate(context: vscode.ExtensionContext): void {
 				}];
 			});
 			const selectedPullRequest = summaries.find(pullRequest => pullRequest.id === selectedOverviewPullRequestId) ?? summaries[0];
-			let review: Awaited<ReturnType<typeof loadPullRequestReview>> | undefined;
+			let review: (Awaited<ReturnType<typeof loadPullRequestReview>> & {
+				sharedState: { key: string; version: number };
+			}) | undefined;
 			if (selectedPullRequest) {
 				selectedOverviewPullRequestId = selectedPullRequest.id;
 				await context.workspaceState.update(selectedPullRequestKey, selectedPullRequest.id);
 				const pullRequest = await gitApi.getPullRequest(selectedRepository.repository, selectedPullRequest.id, selectedRepository.project);
-				review = await loadPullRequestReview(pullRequest, selectedRepository, {
+				const loadedReview = await loadPullRequestReview(pullRequest, selectedRepository, {
 					getGitApi,
 					getCurrentUserId: getAuthenticatedUserId,
 					getReviewedPaths: reviewState => Promise.resolve(reviewStateStore.getReviewedPaths(reviewState)),
 				});
+				const reviewState = reviewStateStore.getState({ ...selectedRepository, pullRequestId: selectedPullRequest.id });
+				review = {
+					...loadedReview,
+					sharedState: { key: reviewStateStore.key({ ...selectedRepository, pullRequestId: selectedPullRequest.id }), version: reviewState.version },
+				};
 			}
 			treeRepository = selectedRepository;
 			treePullRequests = summaries;
@@ -793,9 +890,11 @@ export function activate(context: vscode.ExtensionContext): void {
 		openPullRequestFileDiff,
 		openPullRequestFile,
 		checkoutPullRequestBranch,
-		arguments_ => reviewStateStore.getReviewedPaths(arguments_),
-		arguments_ => reviewStateStore.setFileReviewed(arguments_),
+		sharedState,
 	);
+	context.subscriptions.push(sharedState.onDidChange(change => {
+		void reviewWebview?.webview.postMessage({ type: 'sharedStateChanged', change });
+	}));
 	const contentProvider: vscode.TextDocumentContentProvider = {
 		provideTextDocumentContent: async uri => {
 			const query = new URLSearchParams(uri.query);
