@@ -4,12 +4,13 @@ This VS Code extension exposes Azure DevOps Git pull requests to agents through 
 
 ## Use
 
-1. Run `Azure DevOps PRs (MCP): Sign In to Azure DevOps`. VS Code opens its normal Microsoft sign-in flow when needed.
-2. Start an agent conversation. VS Code discovers the `Azure DevOps pull requests` MCP server automatically.
+Before asking an agent to use this extension, run `Azure DevOps PRs (MCP): Sign In to Azure DevOps`. Complete VS Code's Microsoft sign-in flow first; the MCP server cannot access Azure DevOps until this session is available.
+
+Then start an agent conversation. VS Code discovers the `Azure DevOps pull requests` MCP server automatically.
 
 The server provides `list_pull_requests`, `get_pull_request`, `open_pull_request_file_diff`, `create_pull_request`, and `submit_pull_request`. `create_pull_request` prepares a local draft; `submit_pull_request` creates the remote pull request and requires `confirm: true`. Both use source and target refs in `refs/heads/...` form and the caller's Azure DevOps permissions.
 
-Pass `includeChanges: true` to `get_pull_request` to return its latest changed files, including commit IDs and change types. In MCP Apps-capable chat hosts, `create_pull_request` opens an editable draft card with a compact, capped list of changed files. It offers a Markdown preview switch and submits the final description text through `submit_pull_request`; the resulting pull request then becomes the interactive review card with current reviewer votes, an **Approve PR** button, clickable comment counts, and an **Open diff** button for every changed file. A spinner is shown while the card loads or performs an action.
+`get_pull_request` includes changed files by default and renders an interactive review card in MCP Apps-capable chat hosts. `create_pull_request` creates a local editable draft card with a Markdown preview, changed-file list, and submit action. Draft descriptions synchronize across open cards. The Activity Bar provides active pull requests, local draft selection, review actions, draft deletion, and the same draft editor. Submitting creates the remote pull request; deleting a draft only removes its local shared state.
 
 VS Code manages the signed-in Microsoft session. Manage or sign out of that account through VS Code's Accounts menu. Start a new agent conversation when a token expires to obtain a fresh Azure DevOps token.
 

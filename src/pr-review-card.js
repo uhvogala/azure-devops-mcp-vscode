@@ -3,7 +3,7 @@ import { setSharedState, subscribeToSharedState } from './mcp-app-shared-state';
 import { renderPullRequestDraft } from './pull-request-draft-ui';
 import { applyReviewedPaths, renderPullRequestReview } from './pull-request-review-ui';
 
-const app = new App({ name: 'Azure DevOps pull request review', version: '0.0.51' }, {});
+const app = new App({ name: 'Azure DevOps pull request review', version: '0.0.52' }, {});
 const root = document.createElement('main');
 root.className = 'review-card';
 document.body.append(root);
