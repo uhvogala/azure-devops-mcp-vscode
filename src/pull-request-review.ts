@@ -68,6 +68,10 @@ export async function loadPullRequestReview(
 		throw new Error('Azure DevOps did not return enough pull request information for review.');
 	}
 	const gitApi = await dependencies.getGitApi(identity.organization);
+	const mergeBase = (await gitApi.getMergeBases(identity.repository, sourceCommit, targetCommit, identity.project))[0]?.commitId;
+	if (!mergeBase) {
+		throw new Error('Azure DevOps could not determine the pull request merge base.');
+	}
 	const [changes, threads, reviewedPaths, currentUserId] = await Promise.all([
 		gitApi.getCommitDiffs(
 			identity.repository,
@@ -75,7 +79,7 @@ export async function loadPullRequestReview(
 			false,
 			1000,
 			undefined,
-			{ version: targetCommit, versionType: GitVersionType.Commit },
+			{ version: mergeBase, versionType: GitVersionType.Commit },
 			{ version: sourceCommit, versionType: GitVersionType.Commit },
 		),
 		gitApi.getThreads(identity.repository, pullRequestId, identity.project),

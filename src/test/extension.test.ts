@@ -154,7 +154,7 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 		]);
 	});
 
-	test('loads cumulative pull request changes instead of the latest iteration delta', async () => {
+	test('loads only source changes since the pull request merge base', async () => {
 		let diffArguments: unknown[] | undefined;
 		const review = await loadPullRequestReview({
 			pullRequestId: 123,
@@ -168,6 +168,7 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			repository: 'example-repository',
 		}, {
 			getGitApi: async () => ({
+				getMergeBases: async () => [{ commitId: 'merge-base-commit' }],
 				getCommitDiffs: async (...arguments_: unknown[]) => {
 					diffArguments = arguments_;
 					return {
@@ -186,7 +187,7 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			{ path: '/.npmrc', changeType: 16 },
 		]);
 		assert.deepStrictEqual(diffArguments?.slice(5), [
-			{ version: 'target-commit', versionType: GitVersionType.Commit },
+			{ version: 'merge-base-commit', versionType: GitVersionType.Commit },
 			{ version: 'source-commit', versionType: GitVersionType.Commit },
 		]);
 	});

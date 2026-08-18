@@ -459,13 +459,17 @@ async function main(): Promise<void> {
 			if (!sourceCommit || !targetCommit) {
 				throw new Error('Azure DevOps could not resolve the source or target branch head.');
 			}
+			const mergeBase = (await gitApi.getMergeBases(repository, sourceCommit, targetCommit, project))[0]?.commitId;
+			if (!mergeBase) {
+				throw new Error('Azure DevOps could not determine the draft merge base.');
+			}
 			const changes = await gitApi.getCommitDiffs(
 				repository,
 				project,
 				false,
 				20,
 				undefined,
-				{ version: targetCommit, versionType: GitVersionType.Commit },
+				{ version: mergeBase, versionType: GitVersionType.Commit },
 				{ version: sourceCommit, versionType: GitVersionType.Commit },
 			);
 			const changeEntries = (changes.changes ?? []).flatMap(change => change.item?.path && !change.item.isFolder ? [{

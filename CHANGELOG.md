@@ -4,6 +4,10 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.63]
+
+- Compare pull request and draft changes from the Git merge base so target-only commits do not appear as PR changes.
+
 ## [0.0.62]
 
 - Wait for Git repository initialization before loading Activity Bar pull request views.
