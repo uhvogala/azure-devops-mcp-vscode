@@ -3,7 +3,7 @@
   "publisher": "aitostack",
   "displayName": "Azure DevOps PRs (MCP)",
   "description": "Expose Azure DevOps pull requests to coding agents through MCP",
-  "version": "0.0.49",
+  "version": "0.0.51",
   "icon": "resources/marketplace-icon.png",
   "license": "MIT",
   "repository": {
@@ -81,6 +81,12 @@
         "title": "Select Pull Request Repository",
         "category": "Azure DevOps PRs (MCP)",
         "icon": "$(repo)"
+      },
+      {
+        "command": "azure-devops-mcp.deletePullRequestDraft",
+        "title": "Delete Pull Request Draft",
+        "category": "Azure DevOps PRs (MCP)",
+        "icon": "$(trash)"
       }
     ],
     "mcpServerDefinitionProviders": [
@@ -138,6 +144,13 @@
           "command": "azure-devops-mcp.selectOverviewRepository",
           "when": "view == azure-devops-mcp.pullRequests",
           "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "azure-devops-mcp.deletePullRequestDraft",
+          "when": "view == azure-devops-mcp.pullRequests && viewItem == azure-devops-mcp.draft",
+          "group": "inline"
         }
       ]
     }

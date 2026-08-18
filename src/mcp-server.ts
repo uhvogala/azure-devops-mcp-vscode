@@ -66,6 +66,23 @@ interface SharedStateWriteResult extends SharedStateSnapshot {
 	applied: boolean;
 }
 
+interface PullRequestDraftRecord {
+	key: string;
+	organization: string;
+	project: string;
+	repository: string;
+	sourceRefName: string;
+	targetRefName: string;
+	title: string;
+	description: string;
+	reviewerIds: string[];
+	changes: unknown[];
+	changesTruncated?: boolean;
+	changesError?: string;
+}
+
+const pullRequestDraftIndexKey = 'azure-devops-mcp.drafts';
+
 function requiredEnvironment(name: string): string {
 	const value = process.env[name];
 	if (!value) {
@@ -219,6 +236,47 @@ async function initializePullRequestDraftState(key: string, description: string)
 	}
 	const result = await setSharedState(key, { description }, 0);
 	return result.applied ? result : getSharedState(key, { description });
+}
+
+function draftRecords(value: unknown): PullRequestDraftRecord[] {
+	return Array.isArray(value) ? value.filter((record): record is PullRequestDraftRecord =>
+		Boolean(record) && typeof record === 'object'
+			&& typeof (record as PullRequestDraftRecord).key === 'string'
+			&& typeof (record as PullRequestDraftRecord).title === 'string') : [];
+}
+
+async function registerPullRequestDraft(draft: PullRequestDraftRecord): Promise<void> {
+	for (;;) {
+		const state = await getSharedState(pullRequestDraftIndexKey, []);
+		const records = draftRecords(state.value).filter(record => record.key !== draft.key);
+		const result = await setSharedState(pullRequestDraftIndexKey, [draft, ...records], state.version);
+		if (result.applied) {
+			return;
+		}
+	}
+}
+
+async function removePullRequestDraft(arguments_: {
+	organization: string;
+	project: string;
+	repository: string;
+	sourceRef: string;
+	targetRef: string;
+	title: string;
+}): Promise<void> {
+	const key = pullRequestDraftStateKey(arguments_);
+	await removePullRequestDraftByKey(key);
+}
+
+async function removePullRequestDraftByKey(key: string): Promise<void> {
+	await setSharedState(key, { deleted: true });
+	for (;;) {
+		const state = await getSharedState(pullRequestDraftIndexKey, []);
+		const result = await setSharedState(pullRequestDraftIndexKey, draftRecords(state.value).filter(draft => draft.key !== key), state.version);
+		if (result.applied) {
+			return;
+		}
+	}
 }
 
 async function setPullRequestFileReviewed(arguments_: Required<PullRequestReviewStateArguments>): Promise<void> {
@@ -586,6 +644,19 @@ async function main(): Promise<void> {
 	);
 
 	server.registerTool(
+		'delete_pull_request_draft',
+		{
+			description: 'Delete a locally stored pull request draft. Reserved for MCP Apps.',
+			inputSchema: z.object({ key: z.string().min(1) }),
+			_meta: { ui: { visibility: ['app'] }, 'ui/visibility': ['app'] },
+		},
+		async ({ key }) => {
+			await removePullRequestDraftByKey(key);
+			return { content: [{ type: 'text', text: 'Draft deleted.' }], structuredContent: { deleted: true } };
+		},
+	);
+
+	server.registerTool(
 		'get_pull_request',
 		{
 			description: 'Show an Azure DevOps pull request by ID as an interactive review card with approvals, checkout, and file actions. Call this immediately whenever the user asks to show, open, view, or review a specific pull request; do not ask for confirmation or merely describe the card.',
@@ -695,18 +766,23 @@ async function main(): Promise<void> {
 			const changedFiles = await pullRequestDraftChanges(organization, project, repository, sourceRef, targetRef);
 			const draftStateKey = pullRequestDraftStateKey({ organization, project, repository, sourceRef, targetRef, title });
 			const draftState = await initializePullRequestDraftState(draftStateKey, description ?? '');
-			const draft = {
-				mode: 'create',
+			const draftRecord: PullRequestDraftRecord = {
+				key: draftStateKey,
+				organization,
+				project,
+				repository,
 				sourceRefName: sourceRef,
 				targetRefName: targetRef,
 				title,
 				description: draftDescription(draftState.value, description ?? ''),
 				reviewerIds: reviewerIds ?? [],
-				organization,
-				project,
-				repository,
-				sharedState: { key: draftStateKey, version: draftState.version },
 				...changedFiles,
+			};
+			await registerPullRequestDraft(draftRecord);
+			const draft = {
+				...draftRecord,
+				mode: 'create',
+				sharedState: { key: draftStateKey, version: draftState.version },
 			};
 			return {
 				content: [{ type: 'text', text: JSON.stringify(draft, null, 2) }],
@@ -742,6 +818,7 @@ async function main(): Promise<void> {
 				description,
 				reviewers: reviewerIds.map(id => ({ id })),
 			}, repository, project);
+			await removePullRequestDraft({ organization, project, repository, sourceRef, targetRef, title });
 			return pullRequestReviewResult(pullRequest, organization, project, repository);
 		},
 	);

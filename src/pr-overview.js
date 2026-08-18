@@ -1,4 +1,5 @@
 import { applyReviewedPaths, renderPullRequestReview } from './pull-request-review-ui';
+import { renderPullRequestDraft } from './pull-request-draft-ui';
 
 const vscode = acquireVsCodeApi();
 const root = document.createElement('main');
@@ -6,11 +7,69 @@ root.className = 'review-host';
 document.body.append(root);
 const pendingActions = new Map();
 let review;
+let disposeDraft = () => undefined;
+const sharedStateListeners = new Map();
 
 function callHostAction(request) {
 	const id = crypto.randomUUID();
 	vscode.postMessage({ type: 'action', id, request });
 	return new Promise(resolve => pendingActions.set(id, resolve));
+}
+
+function subscribeSharedState(sharedState, defaultValue, onChange) {
+	if (!sharedState?.key) {return () => undefined;}
+	const listeners = sharedStateListeners.get(sharedState.key) ?? new Set();
+	const listener = change => {
+		sharedState.version = change.version;
+		onChange(change.value);
+	};
+	listeners.add(listener);
+	sharedStateListeners.set(sharedState.key, listeners);
+	return () => {
+		listeners.delete(listener);
+		if (listeners.size === 0) {sharedStateListeners.delete(sharedState.key);}
+	};
+}
+
+async function setSharedState(sharedState, value) {
+	let expectedVersion = sharedState.version ?? 0;
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		const result = await callHostAction({
+			name: 'set_shared_state',
+			arguments: { key: sharedState.key, value, expectedVersion },
+		});
+		if (result.isError) {throw new Error(result.content?.[0]?.text || 'Unable to update shared state.');}
+		const state = result.structuredContent;
+		if (!state || typeof state.version !== 'number') {throw new Error('Invalid shared state response.');}
+		sharedState.version = state.version;
+		if (state.applied) {return state;}
+		expectedVersion = state.version;
+	}
+	throw new Error('The draft changed before it could be updated.');
+}
+
+function renderDraft(draft) {
+	disposeDraft();
+	review = undefined;
+	disposeDraft = renderPullRequestDraft(root, draft, {
+		callAction: callHostAction,
+		subscribeSharedState,
+		setSharedState,
+		onSubmitted: nextReview => {
+			if (nextReview?.id && Array.isArray(nextReview.changes)) {renderReview(nextReview);}
+		},
+		onDeleted: () => {
+			disposeDraft();
+			root.textContent = 'Draft deleted.';
+		},
+	});
+}
+
+function renderReview(nextReview) {
+	disposeDraft();
+	disposeDraft = () => undefined;
+	review = nextReview;
+	renderPullRequestReview(root, review, callHostAction);
 }
 
 window.addEventListener('message', event => {
@@ -21,17 +80,20 @@ window.addEventListener('message', event => {
 	}
 	if (event.data.type === 'sharedStateChanged') {
 		const change = event.data.change;
-		if (review?.sharedState?.key !== change?.key || !Array.isArray(change.value)) {
-			return;
+		for (const listener of sharedStateListeners.get(change?.key) ?? []) {listener(change);}
+		if (review?.sharedState?.key === change?.key && Array.isArray(change.value)) {
+			review.sharedState.version = change.version;
+			applyReviewedPaths(review, change.value);
+			renderPullRequestReview(root, review, callHostAction);
 		}
-		review.sharedState.version = change.version;
-		applyReviewedPaths(review, change.value);
-		renderPullRequestReview(root, review, callHostAction);
 		return;
 	}
 	if (event.data.review) {
-		review = event.data.review;
-		renderPullRequestReview(root, review, callHostAction);
+		renderReview(event.data.review);
+		return;
+	}
+	if (event.data.draft) {
+		renderDraft(event.data.draft);
 		return;
 	}
 	root.textContent = event.data.error || 'Select a pull request to review.';

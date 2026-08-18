@@ -23,6 +23,8 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 		assert.ok(commands.includes('azure-devops-mcp.openLocalPullRequestFile'));
 		assert.ok(commands.includes('azure-devops-mcp.refreshOverview'));
 		assert.ok(commands.includes('azure-devops-mcp.selectOverviewRepository'));
+		assert.ok(commands.includes('azure-devops-mcp.selectOverviewDraft'));
+		assert.ok(commands.includes('azure-devops-mcp.deletePullRequestDraft'));
 	});
 
 	test('forwards checkout and reviewed-file actions with their full card parameters', async () => {
