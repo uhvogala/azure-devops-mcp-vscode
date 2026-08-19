@@ -71,7 +71,7 @@ async function main() {
 :root[data-theme="dark"] { color-scheme: dark; }
 html, body { height: auto; overflow: visible; }
 body { margin: 0; background: transparent; }
-.review-card { position: relative; box-sizing: border-box; max-width: 720px; height: auto; min-height: 0; overflow: visible; padding: 18px; border: 1px solid var(--color-border-primary, #cbd5e1); border-radius: var(--border-radius-md, 8px); background: var(--color-background-primary, #fff); }
+.review-card { position: relative; box-sizing: border-box; max-width: 720px; height: auto; min-height: 0; overflow: visible; padding: 18px; border: 1px solid var(--color-border-primary, #cbd5e1); border-radius: var(--border-radius-md, 8px); background: var(--color-background-primary, #fff); } .terminal-state { display: grid; min-height: 160px; place-items: center; color: var(--color-text-secondary, #64748b); text-align: center; }
 .loading-spinner { position: absolute; z-index: 1; inset: 0; display: grid; place-items: center; border-radius: inherit; background: rgba(15, 23, 42, 0.08); cursor: progress; } .loading-spinner::after { width: 22px; height: 22px; border: 3px solid var(--color-border-primary, #cbd5e1); border-top-color: #1686c3; border-radius: 50%; content: ''; animation: review-card-spin 0.8s linear infinite; } @keyframes review-card-spin { to { transform: rotate(360deg); } }
 .header, .files-header, .file { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .number, .file-details span, .files-header span { color: var(--color-text-secondary, #64748b); font-size: 12px; }

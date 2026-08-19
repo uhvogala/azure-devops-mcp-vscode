@@ -4,7 +4,7 @@ import { renderPullRequestDraft } from './pull-request-draft-ui';
 import { subscribeToPullRequestRefresh } from './pull-request-refresh';
 import { applyReviewedPaths, renderPullRequestReview } from './pull-request-review-ui';
 
-const app = new App({ name: 'Azure DevOps pull request review', version: '0.0.63' }, {});
+const app = new App({ name: 'Azure DevOps pull request review', version: '0.0.67' }, {});
 const root = document.createElement('main');
 root.className = 'review-card';
 document.body.append(root);
@@ -19,6 +19,13 @@ function element(name, className) {
 		node.className = className;
 	}
 	return node;
+}
+
+function renderMessage(message) {
+	const state = element('div', 'terminal-state');
+	state.setAttribute('role', 'status');
+	state.textContent = message;
+	root.replaceChildren(state);
 }
 
 function updateLoadingState() {
@@ -73,11 +80,16 @@ function renderDraft(draft) {
 		subscribeSharedState: (sharedState, defaultValue, onChange) => subscribeToSharedState(app, sharedState, defaultValue, onChange),
 		setSharedState: (sharedState, value) => setSharedState(app, sharedState, value),
 		onSubmitted: review => {
-			if (review?.id && Array.isArray(review.changes)) {renderReview(review);}
+			if (review?.id && Array.isArray(review.changes)) {
+				renderReview(review);
+			} else {
+				unsubscribeSharedState();
+				renderMessage('Pull request submitted.');
+			}
 		},
 		onDeleted: () => {
 			unsubscribeSharedState();
-			root.textContent = 'Draft deleted.';
+			renderMessage('Draft deleted.');
 		},
 	});
 }

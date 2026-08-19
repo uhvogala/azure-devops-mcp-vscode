@@ -189,6 +189,10 @@ function pullRequestDraftStateKey({ organization, project, repository, sourceRef
 	return `azure-devops-mcp.draft.${[organization, project, repository, sourceRef, targetRef, title].map(encodeURIComponent).join('.')}`;
 }
 
+function refFilter(ref: string): string {
+	return ref.replace(/^refs\//, '');
+}
+
 function reviewedPaths(value: unknown): readonly string[] {
 	return Array.isArray(value) ? value.filter((path): path is string => typeof path === 'string') : [];
 }
@@ -284,8 +288,8 @@ async function removePullRequestDraft(arguments_: {
 	await removePullRequestDraftByKey(key);
 }
 
-async function removePullRequestDraftByKey(key: string): Promise<void> {
-	await setSharedState(key, { deleted: true });
+async function removePullRequestDraftByKey(key: string, state: { deleted?: true; submitted?: true } = { deleted: true }): Promise<void> {
+	await setSharedState(key, state);
 	for (;;) {
 		const state = await getSharedState(pullRequestDraftIndexKey, []);
 		const result = await setSharedState(pullRequestDraftIndexKey, draftRecords(state.value).filter(draft => draft.key !== key), state.version);
@@ -352,7 +356,7 @@ async function main(): Promise<void> {
 		{ name: 'azure-devops-pull-requests', version: '0.0.1' },
 		{
 			instructions:
-				'This server manages Azure DevOps pull requests. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Whenever the user asks to show, open, view, or review a specific pull request, call get_pull_request immediately (with includeChanges: true, which is the default). Do not ask for confirmation or merely offer to show the card: render the interactive review card with approvals, checkout, and file actions. Use list_pull_requests only when the pull request ID is unknown. To draft a new pull request, call create_pull_request, which also renders an interactive card for editing and submitting.',
+				'This server manages Azure DevOps pull requests. VS Code reuses its existing Microsoft session: do not invoke the Sign In command routinely; only ask the user to sign in when an operation reports missing or expired authentication. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Whenever the user asks to show, open, view, or review a specific pull request, call get_pull_request immediately (with includeChanges: true, which is the default). Do not ask for confirmation or merely offer to show the card: render the interactive review card with approvals, checkout, and file actions. Use list_pull_requests only when the pull request ID is unknown. To draft a new pull request, call create_pull_request and present its editable card. Before calling submit_pull_request, ask whether the user wants to change the draft text and wait for explicit confirmation to submit.',
 		},
 	);
 
@@ -453,9 +457,12 @@ async function main(): Promise<void> {
 	) => {
 		try {
 			const gitApi = await getGitApi(organization);
-			const refs = await gitApi.getRefs(repository, project);
-			const sourceCommit = refs.find(ref => ref.name === sourceRef)?.objectId;
-			const targetCommit = refs.find(ref => ref.name === targetRef)?.objectId;
+			const [sourceRefs, targetRefs] = await Promise.all([
+				gitApi.getRefs(repository, project, refFilter(sourceRef)),
+				gitApi.getRefs(repository, project, refFilter(targetRef)),
+			]);
+			const sourceCommit = sourceRefs.find(ref => ref.name === sourceRef)?.objectId;
+			const targetCommit = targetRefs.find(ref => ref.name === targetRef)?.objectId;
 			if (!sourceCommit || !targetCommit) {
 				throw new Error('Azure DevOps could not resolve the source or target branch head.');
 			}
@@ -882,7 +889,10 @@ async function main(): Promise<void> {
 				description,
 				reviewers: reviewerIds.map(id => ({ id })),
 			}, repository, project);
-			await removePullRequestDraft({ organization, project, repository, sourceRef, targetRef, title });
+			await removePullRequestDraftByKey(
+				pullRequestDraftStateKey({ organization, project, repository, sourceRef, targetRef, title }),
+				{ submitted: true },
+			);
 			return pullRequestReviewResult(pullRequest, organization, project, repository);
 		},
 	);

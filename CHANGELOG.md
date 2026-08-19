@@ -4,6 +4,25 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.67]
+
+- Center deleted, submitted, and no-selection status messages in pull request cards.
+
+## [0.0.66]
+
+- Use Azure DevOps `heads/...` ref filters when loading draft changed files.
+
+## [0.0.65]
+
+- Load only the selected source and target refs when preparing draft changed files.
+
+## [0.0.64]
+
+- Show Activity Bar loading feedback while selecting repositories and pull requests, and select a workspace repository by default.
+- Show complete changed-file paths on hover and render comments positioned on either diff side.
+- Mark submitted draft cards as submitted instead of deleted.
+- Guide agents to reuse existing sign-in sessions and obtain text-review confirmation before submission.
+
 ## [0.0.63]
 
 - Compare pull request and draft changes from the Git merge base so target-only commits do not appear as PR changes.

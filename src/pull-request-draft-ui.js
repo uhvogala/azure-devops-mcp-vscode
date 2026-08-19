@@ -86,6 +86,10 @@ export function renderPullRequestDraft(root, draft, { callAction, subscribeShare
 			if (!submitting) {onDeleted?.();}
 			return;
 		}
+		if (value && typeof value === 'object' && value.submitted === true) {
+			if (!submitting) {onSubmitted?.();}
+			return;
+		}
 		if (!value || typeof value !== 'object' || typeof value.description !== 'string') {return;}
 		draft.description = value.description;
 		if (descriptionInput.value !== value.description) {
@@ -113,6 +117,7 @@ export function renderPullRequestDraft(root, draft, { callAction, subscribeShare
 			const file = element('div', 'draft-file');
 			const path = element('code');
 			path.textContent = change.path;
+			path.title = change.path;
 			const kind = element('span');
 			kind.textContent = changeLabel(change.changeType);
 			file.append(path, kind);

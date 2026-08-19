@@ -163,6 +163,7 @@ export function renderPullRequestReview(root, review, callAction) {
 		const details = element('div', 'file-details');
 		const path = element('code');
 		path.textContent = change.path;
+		path.title = change.path;
 		const kind = element('span');
 		kind.textContent = changeLabel(change.changeType);
 		const comments = element('button', 'comment-count');

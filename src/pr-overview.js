@@ -13,6 +13,14 @@ let disposeReviewRefresh = () => undefined;
 let disposeRepositoryRefresh = () => undefined;
 const sharedStateListeners = new Map();
 
+function renderMessage(message) {
+	const state = document.createElement('div');
+	state.className = 'terminal-state';
+	state.setAttribute('role', 'status');
+	state.textContent = message;
+	root.replaceChildren(state);
+}
+
 function callHostAction(request) {
 	const id = crypto.randomUUID();
 	vscode.postMessage({ type: 'action', id, request });
@@ -61,11 +69,16 @@ function renderDraft(draft) {
 		subscribeSharedState,
 		setSharedState,
 		onSubmitted: nextReview => {
-			if (nextReview?.id && Array.isArray(nextReview.changes)) {renderReview(nextReview);}
+			if (nextReview?.id && Array.isArray(nextReview.changes)) {
+				renderReview(nextReview);
+			} else {
+				disposeDraft();
+				renderMessage('Pull request submitted.');
+			}
 		},
 		onDeleted: () => {
 			disposeDraft();
-			root.textContent = 'Draft deleted.';
+			renderMessage('Draft deleted.');
 		},
 	});
 }
@@ -130,7 +143,7 @@ window.addEventListener('message', event => {
 		renderDraft(event.data.draft);
 		return;
 	}
-	root.textContent = event.data.error || 'Select a pull request to review.';
+	renderMessage(event.data.error || 'Select a pull request to review.');
 });
 
 vscode.postMessage({ type: 'ready' });

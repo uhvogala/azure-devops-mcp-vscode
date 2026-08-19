@@ -110,7 +110,7 @@ function reviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 <style>
 :root { color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
 html, body, main { height: 100%; } body { margin: 0; overflow: hidden; } .review-host, .review-host *, .review-host *::before, .review-host *::after { box-sizing: border-box; }
-.review-host { width: 100%; height: 100%; overflow: auto; padding: 12px; } .review-host.is-loading { opacity: .65; pointer-events: none; }
+.review-host { width: 100%; height: 100%; overflow: auto; padding: 12px; } .review-host.is-loading { opacity: .65; pointer-events: none; } .terminal-state { display: grid; min-height: 160px; place-items: center; padding: 16px; border: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); text-align: center; }
 .header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; } h1, h2 { margin: 0; } h1 { font-size: 15px; line-height: 1.35; } h2 { font-size: 12px; } .number, .files-header span, .file-details span, .approvals-count, .reviewer-vote { color: var(--vscode-descriptionForeground); font-size: 11px; }
 .status { padding: 3px 6px; background: var(--vscode-testing-iconPassed); color: var(--vscode-editor-background); font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .branches { display: grid; gap: 6px; width: 100%; margin-top: 12px; padding: 6px 8px; border-left: 3px solid var(--vscode-focusBorder); background: var(--vscode-editorWidget-background); overflow-wrap: anywhere; } .branch-actions { display: flex; flex-wrap: wrap; gap: 6px; } .branch-error, .approval-error, .action-error { color: var(--vscode-errorForeground); font-size: 11px; overflow-wrap: anywhere; } .branch-error:empty { display: none; } .checkout-branch { padding: 4px 8px; min-height: 24px; font-size: 11px; }
@@ -448,10 +448,10 @@ function commentDocumentReference(uri: vscode.Uri): PullRequestCommentDocumentRe
 	return { organization, project, repository, pullRequestId, path: uri.path };
 }
 
-function threadRange(thread: GitPullRequestCommentThread): vscode.Range | undefined {
+function threadRange(thread: GitPullRequestCommentThread, side: 'left' | 'right'): vscode.Range | undefined {
 	const context = thread.threadContext;
-	const start = context?.rightFileStart?.line;
-	const end = context?.rightFileEnd?.line ?? start;
+	const start = side === 'right' ? context?.rightFileStart?.line : context?.leftFileStart?.line;
+	const end = side === 'right' ? context?.rightFileEnd?.line ?? start : context?.leftFileEnd?.line ?? start;
 	if (!start || !end) {
 		return undefined;
 	}
@@ -637,7 +637,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			azureComment(comment.content ?? text.trim(), comment.author?.displayName ?? 'Azure DevOps user', comment.publishedDate),
 		];
 	};
-	const renderPullRequestComments = async (arguments_: PullRequestCommentDocumentReference, uri: vscode.Uri): Promise<void> => {
+	const renderPullRequestComments = async (arguments_: PullRequestCommentDocumentReference, uri: vscode.Uri, side: 'left' | 'right'): Promise<void> => {
 		const key = uri.toString();
 		for (const thread of renderedCommentThreads.get(key) ?? []) {
 			thread.dispose();
@@ -648,7 +648,10 @@ export function activate(context: vscode.ExtensionContext): void {
 			if (thread.isDeleted || thread.threadContext?.filePath !== arguments_.path) {
 				return [];
 			}
-			const range = threadRange(thread);
+			const range = threadRange(thread, side);
+			if (side === 'left' && threadRange(thread, 'right')) {
+				return [];
+			}
 			const comments = threadComments(thread);
 			if (!range || comments.length === 0) {
 				return [];
@@ -695,7 +698,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				rightFileEnd: { line, offset: 1 },
 			},
 		}, reference.repository, reference.pullRequestId, reference.project);
-		await renderPullRequestComments(reference, uri);
+		await renderPullRequestComments(reference, uri, 'right');
 	};
 	const openPullRequestFileDiff = async (arguments_: OpenPullRequestFileDiffArguments): Promise<void> => {
 		const isAdded = (arguments_.changeType & VersionControlChangeType.Add) !== 0;
@@ -714,7 +717,10 @@ export function activate(context: vscode.ExtensionContext): void {
 			right,
 			`PR: ${arguments_.path}`,
 		);
-		await renderPullRequestComments(arguments_, right);
+		await Promise.all([
+			renderPullRequestComments({ ...arguments_, path: originalPath }, left, 'left'),
+			renderPullRequestComments(arguments_, right, 'right'),
+		]);
 	};
 	const gitRepositoryForRepository = async (repository: string): Promise<GitRepository | undefined> =>
 		(await ensureGitApi()).repositories.find(candidate => {
@@ -784,6 +790,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	let treeRepository: WorkspaceRepository | undefined;
 	let treePullRequests: readonly OverviewPullRequest[] = [];
 	let treeError: string | undefined;
+	let treeLoading = false;
 	const treeChanged = new vscode.EventEmitter<void>();
 	let selectedDraftKey = context.workspaceState.get<string>('azure-devops-mcp.draft.selected');
 	let treeDrafts: readonly OverviewPullRequestDraft[] = [];
@@ -889,6 +896,10 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.window.showWarningMessage(error instanceof Error ? error.message : 'VS Code Git integration is unavailable.');
 	});
 	const refreshOverview = async (): Promise<void> => {
+		treeLoading = true;
+		treeError = undefined;
+		treeChanged.fire();
+		try {
 		const repositories = await workspaceRepositories();
 		const selectedRepository = repositories.find(repository => repositoryKey(repository) === selectedOverviewRepositoryKey) ?? repositories[0];
 		if (!selectedRepository) {
@@ -964,6 +975,15 @@ export function activate(context: vscode.ExtensionContext): void {
 			treeChanged.fire();
 			await reviewWebview?.webview.postMessage({ error: treeError });
 		}
+		} catch (overviewError) {
+			treeRepository = undefined;
+			treePullRequests = [];
+			treeError = overviewError instanceof Error ? overviewError.message : 'Unable to load pull requests.';
+			await reviewWebview?.webview.postMessage({ error: treeError });
+		} finally {
+			treeLoading = false;
+			treeChanged.fire();
+		}
 	};
 	refreshOverviewOnGitOpen = () => { void refreshOverview(); };
 	const pullRequestsProvider: vscode.TreeDataProvider<vscode.TreeItem> = {
@@ -972,6 +992,11 @@ export function activate(context: vscode.ExtensionContext): void {
 		getChildren: element => {
 			if (!element) {
 				const items: vscode.TreeItem[] = [];
+				if (treeLoading) {
+					const loadingItem = new vscode.TreeItem('Loading pull requests...', vscode.TreeItemCollapsibleState.None);
+					loadingItem.iconPath = new vscode.ThemeIcon('loading~spin');
+					items.push(loadingItem);
+				}
 				if (treeRepository) {
 					const repositoryItem = new vscode.TreeItem(treeRepository.repository, vscode.TreeItemCollapsibleState.Expanded);
 					repositoryItem.description = `${treeRepository.organization}/${treeRepository.project}`;
@@ -1090,6 +1115,15 @@ export function activate(context: vscode.ExtensionContext): void {
 									getCurrentUserId: getAuthenticatedUserId,
 									getReviewedPaths: reviewState => Promise.resolve(reviewStateStore.getReviewedPaths(reviewState)),
 								});
+								const submittedDraft = treeDrafts.find(draft => draft.organization === arguments_.organization
+									&& draft.project === arguments_.project
+									&& draft.repository === arguments_.repository
+									&& draft.sourceRefName === arguments_.sourceRef
+									&& draft.targetRefName === arguments_.targetRef
+									&& draft.title === arguments_.title);
+								if (submittedDraft) {
+									await sharedState.set(submittedDraft.key, { submitted: true });
+								}
 								await sharedState.update<OverviewPullRequestDraft[]>(pullRequestDraftIndexKey, [], drafts =>
 									drafts.filter(draft => !(draft.organization === arguments_.organization
 										&& draft.project === arguments_.project
@@ -1136,6 +1170,9 @@ export function activate(context: vscode.ExtensionContext): void {
 			void refreshOverview();
 		}
 	});
+	if (pullRequestsTree.visible) {
+		void refreshOverview();
+	}
 	const commandBridge = new PullRequestCommandBridge(
 		openPullRequestFileDiff,
 		openPullRequestFile,
@@ -1198,6 +1235,8 @@ export function activate(context: vscode.ExtensionContext): void {
 			if (selected) {
 				selectedOverviewRepositoryKey = repositoryKey(selected.repository);
 				selectedOverviewPullRequestId = context.workspaceState.get<number>(`azure-devops-mcp.overview.pullRequest.${selectedOverviewRepositoryKey}`);
+				treeRepository = selected.repository;
+				treePullRequests = [];
 				await refreshOverview();
 			}
 		}),
