@@ -1,0 +1,1 @@
+declare const __AZURE_DEVOPS_MCP_VERSION__: string;

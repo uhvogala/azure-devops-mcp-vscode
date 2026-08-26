@@ -175,6 +175,33 @@ export function renderPullRequestReview(root, review, callAction) {
 	approvalActions.append(approveButton, approvalError);
 	approvals.append(approvalsHeader, approvalList, approvalActions);
 
+	const linkedWorkItems = Array.isArray(review.workItems) ? review.workItems : [];
+	const workItems = element('section', 'work-items');
+	if (linkedWorkItems.length > 0) {
+		const workItemsTitle = element('h2', 'section-title');
+		workItemsTitle.textContent = 'Linked work items';
+		const workItemList = element('div', 'work-item-list');
+		for (const workItem of linkedWorkItems) {
+			const workItemRow = element(workItem.url ? 'a' : 'div', 'work-item');
+			if (workItem.url) {
+				workItemRow.href = workItem.url;
+				workItemRow.target = '_blank';
+				workItemRow.rel = 'noreferrer';
+				workItemRow.title = `Open work item ${workItem.id}: ${workItem.title ?? 'Untitled work item'}`;
+			}
+			const id = element('span', 'work-item-id');
+			id.textContent = `#${workItem.id}`;
+			const title = element('span', 'work-item-title');
+			title.textContent = workItem.title ?? 'Untitled work item';
+			title.title = workItem.title ?? 'Untitled work item';
+			const metadata = element('span', 'work-item-metadata');
+			metadata.textContent = [workItem.type, workItem.state].filter(Boolean).join(' · ');
+			workItemRow.append(id, title, metadata);
+			workItemList.append(workItemRow);
+		}
+		workItems.append(workItemsTitle, workItemList);
+	}
+
 	const summary = element('section', 'summary');
 	const summaryTitle = element('h2', 'section-title');
 	summaryTitle.textContent = 'Description';
@@ -251,5 +278,5 @@ export function renderPullRequestReview(root, review, callAction) {
 		fileList.append(row);
 	}
 	files.append(filesSectionHeader, fileList);
-	root.append(header, branches, approvals, summary, files);
+	root.append(header, branches, approvals, workItems, summary, files);
 }

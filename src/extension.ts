@@ -3,6 +3,7 @@ import * as azureDevOps from 'azure-devops-node-api';
 import {
 	CommentType,
 	CommentThreadStatus,
+	GitPullRequest,
 	GitPullRequestCommentThread,
 	GitVersionType,
 	PullRequestStatus,
@@ -103,6 +104,7 @@ function repositoryRefreshStateKey(repository: WorkspaceRepository): string {
 
 function reviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 	const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'pr-overview.js'));
+	const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'review-card.css'));
 	const reviewAssets = Object.fromEntries(Object.entries({
 		notReviewed: 'not-reviewed.svg',
 		openDiff: 'open-diff.svg',
@@ -113,19 +115,7 @@ function reviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 	return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
-<style>
-:root { --review-surface-radius: var(--vscode-cornerRadius-large, 8px); color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
-html, body, main { height: 100%; } body { margin: 0; overflow: hidden; } .review-host, .review-host *, .review-host *::before, .review-host *::after { box-sizing: border-box; }
-.review-host { width: 100%; height: 100%; overflow: auto; padding: 12px; } .review-host.is-loading { opacity: .65; pointer-events: none; } .terminal-state { display: grid; min-height: 160px; place-items: center; padding: 16px; border: 1px solid var(--vscode-panel-border); border-radius: var(--review-surface-radius); color: var(--vscode-descriptionForeground); text-align: center; }
-.header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; } h1, h2 { margin: 0; } h1 { font-size: 17px; line-height: 23px; } h2 { font-size: 12px; } .number, .files-header span, .file-details span, .approvals-count, .reviewer-vote { color: var(--vscode-descriptionForeground); font-size: 11px; }
-.status { padding: 3px 6px; border: 0; background: var(--vscode-list-inactiveSelectionBackground); color: var(--vscode-testing-iconPassed); font-size: 10px; font-weight: 700; text-transform: uppercase; }
-.branches { display: flex; align-items: flex-start; gap: 7px; width: 100%; margin-top: 12px; padding: 9px 10px; border: 1px solid var(--vscode-panel-border); border-radius: var(--review-surface-radius); background: var(--vscode-editorWidget-background); } .branch-flow, .branch-control { display: inline-flex; align-items: center; min-width: 0; overflow-wrap: anywhere; } .branch-flow { gap: 7px; } .branch-control { gap: 4px; } .branch-link { min-width: 0; padding: 0; border: 0; background: transparent; color: var(--vscode-textLink-foreground); font: inherit; font-size: 12px; cursor: pointer; } .branch-link:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; } .branch-link:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; } .branch-link.is-current { color: var(--vscode-textLink-foreground); cursor: default; } .branch-link.is-checking-out { cursor: progress; opacity: .7; } .branch-separator { color: var(--vscode-descriptionForeground); } .current-branch-mark { color: var(--vscode-testing-iconPassed); font-size: 12px; line-height: 16px; } .branch-error, .approval-error, .action-error { color: var(--vscode-errorForeground); font-size: 11px; overflow-wrap: anywhere; } .branch-error:empty { display: none; }
-.approvals, .summary, .files { width: 100%; margin-top: 12px; } .approvals-header, .reviewer, .files-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; } .approvals-header { margin-bottom: 12px; } .approvals-header .section-title, .section-heading .section-title { margin: 0; } .approval-list { display: grid; overflow: hidden; border-radius: var(--review-surface-radius); } .reviewer { padding: 7px 10px; border-bottom: 1px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background); font-size: 12px; } .reviewer:last-child { border-bottom: 0; } .reviewer-name { min-width: 0; overflow-wrap: anywhere; } .approval-actions { display: flex; margin-top: 12px; } .draft-status { color: var(--vscode-textLink-foreground); } .draft-description, .draft-files { margin-top: 16px; } .draft-description-header, .draft-details { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; } .preview-control { display: inline-flex; align-items: center; gap: 5px; color: var(--vscode-descriptionForeground); font-size: 11px; cursor: pointer; } .description-input { width: 100%; min-height: 130px; resize: vertical; padding: 8px; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); font: inherit; } .description-preview { min-height: 130px; padding: 8px; border: 1px solid var(--vscode-panel-border); border-radius: var(--review-surface-radius); background: var(--vscode-editorWidget-background); } .draft-files { overflow: hidden; border: 1px solid var(--vscode-panel-border); border-radius: var(--review-surface-radius); } .draft-file, .draft-file-empty { display: flex; justify-content: space-between; gap: 8px; padding: 7px 8px; border-top: 1px solid var(--vscode-panel-border); } .draft-file span, .draft-file-empty { color: var(--vscode-descriptionForeground); font-size: 11px; } .draft-file-empty { display: block; } .draft-details { justify-content: flex-start; margin-top: 10px; flex-wrap: wrap; } .draft-details > span:first-child { color: var(--vscode-descriptionForeground); font-size: 11px; }
-.section-title { margin-bottom: 12px; color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: none; } .markdown { font-size: 12px; line-height: 18px; } .markdown p { margin: 0 0 6px; } .markdown code, code { font-family: var(--vscode-font-family); }
-.files { overflow: visible; } .section-heading { display: flex; align-items: center; min-height: 16px; margin-bottom: 12px; } .file-list { overflow: hidden; border: 1px solid var(--vscode-panel-border); border-radius: var(--review-surface-radius); background: var(--vscode-editorWidget-background); } .files-header { min-height: 34px; padding: 9px 10px; background: var(--vscode-editorWidget-background); } .file { display: grid; grid-template-columns: 16px minmax(0, 1fr) 58px; min-height: 50px; align-items: center; gap: 8px; width: 100%; margin: 0; padding: 8px 8px 8px 10px; border: 0; border-top: 1px solid var(--vscode-panel-border); } .file:has(input:checked) { background: var(--vscode-list-inactiveSelectionBackground); } .file-details { min-width: 0; display: grid; align-content: center; gap: 2px; } .file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .file-metadata { display: flex; align-items: center; gap: 6px; min-width: 0; } .change-kind.change-added { color: var(--vscode-gitDecoration-addedResourceForeground, #89d185); } .change-kind.change-modified, .change-kind.change-renamed { color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); } .change-kind.change-deleted { color: var(--vscode-gitDecoration-deletedResourceForeground, #f48771); } .file-actions { display: grid; grid-template-columns: repeat(2, 28px); gap: 2px; } button.file-action { display: grid; place-items: center; width: 28px; min-height: 28px; padding: 0; border: 0; background: var(--vscode-editorWidget-background); } button.file-action:hover { background: var(--vscode-toolbar-hoverBackground); } .file-action-icon, .review-icon { display: block; width: 16px; height: 16px; } .review-control { position: relative; display: grid; place-items: center; width: 16px; height: 16px; cursor: pointer; } .review-control input { position: absolute; opacity: 0; cursor: pointer; } .review-control:has(input:focus-visible) { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; } .review-control input:disabled, .review-control input:disabled + .review-icon { cursor: progress; } .action-error:empty { display: none; }
-button { min-height: 28px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 3px; padding: 5px 10px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; } button:hover { background: var(--vscode-button-hoverBackground); } button:disabled { opacity: .7; cursor: progress; } .comment-count { min-height: auto; justify-self: start; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--vscode-textLink-foreground); font-size: 11px; text-decoration: none; }
-@media (max-width: 540px) { .file { gap: 6px; } }
-</style></head><body><script nonce="${nonce}">globalThis.__azureDevOpsMcpReviewAssets = ${JSON.stringify(reviewAssets)};</script><script nonce="${nonce}" src="${scriptUri}"></script></body></html>`;
+<link rel="stylesheet" href="${styleUri}"></head><body><script nonce="${nonce}">globalThis.__azureDevOpsMcpReviewAssets = ${JSON.stringify(reviewAssets)};</script><script nonce="${nonce}" src="${scriptUri}"></script></body></html>`;
 }
 
 interface OpenPullRequestFileDiffArguments {
@@ -607,6 +597,14 @@ export function activate(context: vscode.ExtensionContext): void {
 		);
 		return connection.getGitApi();
 	};
+	const getWorkItemTrackingApi = async (organization: string) => {
+		const environment = await authentication.getServerEnvironment();
+		const connection = new azureDevOps.WebApi(
+			`https://dev.azure.com/${encodeURIComponent(organization)}`,
+			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
+		);
+		return connection.getWorkItemTrackingApi();
+	};
 	const getAuthenticatedUserId = async (organization: string): Promise<string> => {
 		const environment = await authentication.getServerEnvironment();
 		const connection = new azureDevOps.WebApi(
@@ -618,6 +616,42 @@ export function activate(context: vscode.ExtensionContext): void {
 			throw new Error('Azure DevOps did not return the signed-in user identity.');
 		}
 		return userId;
+	};
+	const listPullRequestWorkItems = async ({ organization, project, repository, pullRequestId }: Pick<PullRequestReviewStateArguments, 'organization' | 'project' | 'repository' | 'pullRequestId'>) => {
+		const references = await (await getGitApi(organization)).getPullRequestWorkItemRefs(repository, pullRequestId, project);
+		const workItemIds = references.map(reference => Number(reference.id)).filter(Number.isSafeInteger);
+		if (workItemIds.length === 0) {
+			return [];
+		}
+		const workItems = await (await getWorkItemTrackingApi(organization)).getWorkItems(
+			workItemIds,
+			['System.Id', 'System.Title', 'System.WorkItemType', 'System.State', 'System.TeamProject'],
+		);
+		const workItemsById = new Map(workItems.map(workItem => [workItem.id, workItem]));
+		return workItemIds.flatMap(id => {
+			const workItem = workItemsById.get(id);
+			return workItem ? [{
+				id,
+				title: workItem.fields?.['System.Title'],
+				type: workItem.fields?.['System.WorkItemType'],
+				state: workItem.fields?.['System.State'],
+				url: `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(String(workItem.fields?.['System.TeamProject'] ?? project))}/_workitems/edit/${id}`,
+			}] : [];
+		});
+	};
+	const loadReviewWithWorkItems = async (
+		pullRequest: GitPullRequest,
+		identity: Pick<PullRequestReviewStateArguments, 'organization' | 'project' | 'repository' | 'pullRequestId'>,
+	) => {
+		const [review, workItems] = await Promise.all([
+			loadPullRequestReview(pullRequest, identity, {
+				getGitApi,
+				getCurrentUserId: getAuthenticatedUserId,
+				getReviewedPaths: reviewState => Promise.resolve(reviewStateStore.getReviewedPaths(reviewState)),
+			}),
+			listPullRequestWorkItems(identity).catch(() => []),
+		]);
+		return { ...review, workItems };
 	};
 	let prDocumentContext = false;
 	const setPrDocumentContext = async (value: boolean): Promise<void> => {
@@ -970,11 +1004,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				selectedOverviewPullRequestId = selectedPullRequest.id;
 				await context.workspaceState.update(selectedPullRequestKey, selectedPullRequest.id);
 				const pullRequest = await gitApi.getPullRequest(selectedRepository.repository, selectedPullRequest.id, selectedRepository.project);
-				const loadedReview = await loadPullRequestReview(pullRequest, selectedRepository, {
-					getGitApi,
-					getCurrentUserId: getAuthenticatedUserId,
-					getReviewedPaths: reviewState => Promise.resolve(reviewStateStore.getReviewedPaths(reviewState)),
-				});
+				const loadedReview = await loadReviewWithWorkItems(pullRequest, { ...selectedRepository, pullRequestId: selectedPullRequest.id });
 				const reviewState = reviewStateStore.getState({ ...selectedRepository, pullRequestId: selectedPullRequest.id });
 				const repositoryState = sharedState.get(repositoryRefreshStateKey(selectedRepository), {});
 				const currentBranch = (await gitRepositoryForRepository(selectedRepository.repository))?.state.HEAD?.name;
@@ -1094,11 +1124,7 @@ export function activate(context: vscode.ExtensionContext): void {
 								if (!isPullRequestReviewStateArguments(arguments_)) {throw new Error('Invalid pull request refresh request.');}
 								const gitApi = await getGitApi(arguments_.organization);
 								const pullRequest = await gitApi.getPullRequest(arguments_.repository, arguments_.pullRequestId, arguments_.project);
-								const loadedReview = await loadPullRequestReview(pullRequest, arguments_, {
-									getGitApi,
-									getCurrentUserId: getAuthenticatedUserId,
-									getReviewedPaths: reviewState => Promise.resolve(reviewStateStore.getReviewedPaths(reviewState)),
-								});
+								const loadedReview = await loadReviewWithWorkItems(pullRequest, arguments_);
 								const reviewState = reviewStateStore.getState(arguments_);
 								const currentBranch = (await gitRepositoryForRepository(arguments_.repository))?.state.HEAD?.name;
 								result.structuredContent = {
@@ -1138,11 +1164,7 @@ export function activate(context: vscode.ExtensionContext): void {
 									description: arguments_.description,
 									reviewers: arguments_.reviewerIds.map(id => ({ id })),
 								}, arguments_.repository, arguments_.project);
-								const loadedReview = await loadPullRequestReview(pullRequest, arguments_, {
-									getGitApi,
-									getCurrentUserId: getAuthenticatedUserId,
-									getReviewedPaths: reviewState => Promise.resolve(reviewStateStore.getReviewedPaths(reviewState)),
-								});
+								const loadedReview = await loadReviewWithWorkItems(pullRequest, { ...arguments_, pullRequestId: pullRequest.pullRequestId! });
 								const submittedDraft = treeDrafts.find(draft => draft.organization === arguments_.organization
 									&& draft.project === arguments_.project
 									&& draft.repository === arguments_.repository

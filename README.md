@@ -47,6 +47,8 @@ Review, draft, and check out Azure DevOps pull requests directly in GitHub Copil
 | Inspect a diff | `Open the diff for src/authentication.ts in PR #1042.` |
 | Add a comment | `Add a comment on line 42 of src/authentication.ts in PR #1042: Please handle an expired token here.` |
 | Draft a PR | `Create a pull request draft for my current branch targeting main.` |
+| Find work items | `Find active work items whose title mentions authentication recovery.` |
+| Link work items | `Link work items 1234 and 5678 to PR #1042.` |
 | Check out a branch | `Check out the source branch for PR #847 locally.` |
 
 ## MCP Tools
@@ -66,8 +68,11 @@ The extension runs a local [Model Context Protocol](https://modelcontextprotocol
 | `approve_pull_request` | Approve a pull request as the signed-in user. |
 | `checkout_pull_request_branch` | Check out a pull request source or target branch locally. |
 | `set_pull_request_file_reviewed` | Mark a changed file as reviewed or not reviewed. |
+| `list_pull_request_work_items` | List work items already linked to a pull request. |
+| `query_work_items` | Query project work items with agent-defined WIQL filters and ordering. |
+| `link_pull_request_work_items` | Link selected work items to an existing pull request after explicit confirmation. |
 | `create_pull_request` | Prepare an editable local pull request draft without creating a remote PR. |
-| `submit_pull_request` | Create a remote pull request after explicit confirmation. |
+| `submit_pull_request` | Create a remote pull request after explicit confirmation, optionally linking work items. |
 
 ## Pull Request Drafts
 

@@ -11,6 +11,7 @@ import {
 } from 'azure-devops-node-api/interfaces/GitInterfaces';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import * as VSSInterfaces from 'azure-devops-node-api/interfaces/common/VSSInterfaces';
 import * as z from 'zod/v4';
 import { loadPullRequestReview, reviewerSummary } from './pull-request-review';
 
@@ -391,10 +392,10 @@ async function invokeExtensionCommand(urlEnvironment: string, arguments_: object
 async function main(): Promise<void> {
 	const getAccessToken = createTokenProvider();
 	const server = new McpServer(
-		{ name: 'azure-devops-pull-requests', version: '0.0.1' },
+		{ name: 'azure-devops-pull-requests', version: __AZURE_DEVOPS_MCP_VERSION__ },
 		{
 			instructions:
-				'This server manages Azure DevOps pull requests. VS Code reuses its existing Microsoft session: do not invoke the Sign In command routinely; only ask the user to sign in when an operation reports missing or expired authentication. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Whenever the user asks to show, open, view, or review a specific pull request, call get_pull_request immediately (with includeChanges: true, which is the default). Do not ask for confirmation or merely offer to show the card: render the interactive review card with approvals, checkout, and file actions. Use list_pull_requests only when the pull request ID is unknown. To draft a new pull request, call create_pull_request and present its editable card. Before calling submit_pull_request, ask whether the user wants to change the draft text and wait for explicit confirmation to submit.',
+				'This server manages Azure DevOps pull requests. VS Code reuses its existing Microsoft session: do not invoke the Sign In command routinely; only ask the user to sign in when an operation reports missing or expired authentication. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Whenever the user asks to show, open, view, or review a specific pull request, call get_pull_request immediately (with includeChanges: true, which is the default). Do not ask for confirmation or merely offer to show the card: render the interactive review card with approvals, checkout, and file actions. Use list_pull_requests only when the pull request ID is unknown. When reviewing or preparing a pull request with no linked work items, briefly offer to find and link relevant items when that would help trace the change; do not make this a prerequisite for creating, submitting, or reviewing the pull request. To draft a new pull request, call create_pull_request and present its editable card. Before calling submit_pull_request, ask whether the user wants to change the draft text and wait for explicit confirmation to submit.',
 		},
 	);
 
@@ -436,6 +437,15 @@ async function main(): Promise<void> {
 		return connection.getGitApi();
 	};
 
+	const getWorkItemTrackingApi = async (organization: string) => {
+		const accessToken = await getAccessToken();
+		const connection = new azureDevOps.WebApi(
+			`https://dev.azure.com/${encodeURIComponent(organization)}`,
+			azureDevOps.getBearerHandler(accessToken),
+		);
+		return connection.getWorkItemTrackingApi();
+	};
+
 	const getAuthenticatedUserId = async (organization: string): Promise<string> => {
 		const accessToken = await getAccessToken();
 		const connection = new azureDevOps.WebApi(
@@ -450,17 +460,125 @@ async function main(): Promise<void> {
 		return userId;
 	};
 
+	const listPullRequestWorkItems = async (organization: string, project: string, repository: string, pullRequestId: number) => {
+		const gitApi = await getGitApi(organization);
+		const references = await gitApi.getPullRequestWorkItemRefs(repository, pullRequestId, project);
+		const workItemIds = references
+			.map(reference => Number(reference.id))
+			.filter(Number.isSafeInteger);
+		if (workItemIds.length === 0) {
+			return [];
+		}
+		const workItems = await (await getWorkItemTrackingApi(organization)).getWorkItems(
+			workItemIds,
+			['System.Id', 'System.Title', 'System.WorkItemType', 'System.State', 'System.TeamProject'],
+			undefined,
+			undefined,
+			undefined,
+		);
+		const workItemsById = new Map(workItems.map(workItem => [workItem.id, workItem]));
+		return workItemIds.flatMap(id => {
+			const workItem = workItemsById.get(id);
+			if (!workItem) {
+				return [];
+			}
+			return [{
+				id,
+				title: workItem.fields?.['System.Title'],
+				type: workItem.fields?.['System.WorkItemType'],
+				state: workItem.fields?.['System.State'],
+				url: `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(String(workItem.fields?.['System.TeamProject'] ?? project))}/_workitems/edit/${id}`,
+			}];
+		});
+	};
+
+	const linkPullRequestWorkItems = async (
+		organization: string,
+		project: string,
+		repository: string,
+		pullRequestId: number,
+		workItemIds: number[],
+		workItemProject = project,
+	) => {
+		const gitApi = await getGitApi(organization);
+		const [repositoryInfo, references] = await Promise.all([
+			gitApi.getRepository(repository, project),
+			gitApi.getPullRequestWorkItemRefs(repository, pullRequestId, project),
+		]);
+		const projectId = repositoryInfo.project?.id;
+		if (!projectId || !repositoryInfo.id) {
+			throw new Error('Azure DevOps did not return the project and repository IDs required to link work items.');
+		}
+		const existingWorkItemIds = new Set(references.map(reference => Number(reference.id)).filter(Number.isSafeInteger));
+		const workItemIdsToLink = [...new Set(workItemIds)].filter(id => !existingWorkItemIds.has(id));
+		const artifactUri = `vstfs:///Git/PullRequestId/${projectId}%2F${repositoryInfo.id}%2F${pullRequestId}`;
+		const workItemTrackingApi = await getWorkItemTrackingApi(organization);
+		for (const workItemId of workItemIdsToLink) {
+			const document = [{
+				op: VSSInterfaces.Operation.Add,
+				path: '/relations/-',
+				value: {
+					rel: 'ArtifactLink',
+					url: artifactUri,
+					attributes: { name: 'Pull Request' },
+				},
+			}] as VSSInterfaces.JsonPatchDocument;
+			await workItemTrackingApi.updateWorkItem({}, document, workItemId, workItemProject);
+		}
+		return {
+			linkedWorkItemIds: workItemIdsToLink,
+			workItemProject,
+			alreadyLinkedWorkItemIds: workItemIds.filter(id => existingWorkItemIds.has(id)),
+		};
+	};
+
+	const queryWorkItems = async (organization: string, project: string, wiql: string, limit: number) => {
+		const workItemTrackingApi = await getWorkItemTrackingApi(organization);
+		const queryResult = await workItemTrackingApi.queryByWiql({ query: wiql }, { project }, undefined, limit);
+		const workItemIds = (queryResult.workItems ?? []).map(reference => Number(reference.id)).filter(Number.isSafeInteger);
+		if (workItemIds.length === 0) {
+			return [];
+		}
+		const workItems = await workItemTrackingApi.getWorkItems(
+			workItemIds,
+			['System.Id', 'System.Title', 'System.WorkItemType', 'System.State', 'System.Tags', 'System.ChangedDate', 'System.TeamProject'],
+			undefined,
+			undefined,
+			undefined,
+			project,
+		);
+		const workItemsById = new Map(workItems.map(workItem => [workItem.id, workItem]));
+		return workItemIds.flatMap(id => {
+			const workItem = workItemsById.get(id);
+			if (!workItem) {
+				return [];
+			}
+			return [{
+				id,
+				title: workItem.fields?.['System.Title'],
+				type: workItem.fields?.['System.WorkItemType'],
+				state: workItem.fields?.['System.State'],
+				tags: workItem.fields?.['System.Tags'],
+				changedAt: workItem.fields?.['System.ChangedDate'],
+				url: `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(String(workItem.fields?.['System.TeamProject'] ?? project))}/_workitems/edit/${id}`,
+			}];
+		});
+	};
+
 	const pullRequestReviewResult = async (
 		pullRequest: GitPullRequest,
 		organization: string,
 		project: string,
 		repository: string,
 	) => {
-		const loadedReview = await loadPullRequestReview(pullRequest, { organization, project, repository }, {
-			getGitApi,
-			getCurrentUserId: getAuthenticatedUserId,
-			getReviewedPaths: getPullRequestReviewState,
-		});
+		const [loadedReview, workItems] = await Promise.all([
+			loadPullRequestReview(pullRequest, { organization, project, repository }, {
+				getGitApi,
+				getCurrentUserId: getAuthenticatedUserId,
+				getReviewedPaths: getPullRequestReviewState,
+			}),
+			listPullRequestWorkItems(organization, project, repository, pullRequest.pullRequestId!).catch(() => []),
+		]);
 		const sharedStateKey = pullRequestReviewStateKey({ organization, project, repository, pullRequestId: pullRequest.pullRequestId! });
 		const sharedState = await getSharedState(sharedStateKey, []);
 		const repositoryStateKey = repositoryRefreshStateKey({ organization, project, repository, pullRequestId: pullRequest.pullRequestId! });
@@ -473,6 +591,7 @@ async function main(): Promise<void> {
 			: workspace.repositories.find(candidate => candidate.organization === organization && candidate.project === project && candidate.repository === repository))?.currentBranch;
 		const review = {
 			...loadedReview,
+			workItems,
 			currentBranch,
 			sharedState: { key: sharedStateKey, version: sharedState.version },
 			repositoryState: { key: repositoryStateKey, version: repositoryState.version },
@@ -480,7 +599,7 @@ async function main(): Promise<void> {
 		return {
 			content: [{
 				type: 'text' as const,
-				text: JSON.stringify({ ...pullRequestSummary(pullRequest), reviewers: review.reviewers, changes: review.changes, changesTruncated: review.changesTruncated }, null, 2),
+				text: JSON.stringify({ ...pullRequestSummary(pullRequest), reviewers: review.reviewers, workItems, changes: review.changes, changesTruncated: review.changesTruncated }, null, 2),
 			}],
 			structuredContent: review,
 		};
@@ -768,6 +887,57 @@ async function main(): Promise<void> {
 	);
 
 	server.registerTool(
+		'list_pull_request_work_items',
+		{
+			description: 'List work items already related to an Azure DevOps pull request. Use after get_pull_request to inspect existing links and after linking to verify the result. Linked items may belong to another project in the same Azure DevOps organization. This tool only reads existing links; use query_work_items to discover candidates and link_pull_request_work_items to change links.',
+			inputSchema: z.object({
+				...repositorySchema,
+				pullRequestId: z.number().int().positive().describe('Azure DevOps pull request ID whose existing work-item links will be read.'),
+			}),
+		},
+		async ({ organization, project, repository, pullRequestId }) => {
+			const workItems = await listPullRequestWorkItems(organization, project, repository, pullRequestId);
+			return { content: [{ type: 'text', text: JSON.stringify(workItems, null, 2) }], structuredContent: { workItems } };
+		},
+	);
+
+	server.registerTool(
+		'query_work_items',
+		{
+			description: "Find candidate Azure DevOps work items with a read-only WIQL query. Before calling, inspect the pull request or user request and compose filters and ordering that fit that specific context; do not rely on a fixed relevance rule. The work-item project may differ from the pull request repository's project when both belong to this Azure DevOps organization. Use a flat SELECT [System.Id] FROM WorkItems query, for example: SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS WORDS 'authentication' AND [System.State] <> 'Closed' ORDER BY [System.ChangedDate] DESC. The project is supplied separately, so @project is available in the query. Present returned candidates to the user before linking any item.",
+			inputSchema: z.object({
+				organization: z.string().min(1).describe('Azure DevOps organization name.'),
+				project: z.string().min(1).describe('Azure DevOps project name or ID.'),
+				wiql: z.string().min(1).max(4_000).describe('Read-only WIQL flat WorkItems query. Include SELECT [System.Id] and choose filters and ORDER BY for the current task.'),
+				limit: z.number().int().min(1).max(200).default(25).describe('Maximum candidates to return. Start with a small limit unless the user requests a broad search.'),
+			}),
+		},
+		async ({ organization, project, wiql, limit }) => {
+			const workItems = await queryWorkItems(organization, project, wiql, limit);
+			return { content: [{ type: 'text', text: JSON.stringify({ workItems }, null, 2) }], structuredContent: { workItems } };
+		},
+	);
+
+	server.registerTool(
+		'link_pull_request_work_items',
+		{
+			description: 'Link explicitly selected Azure DevOps work items to an existing pull request. First inspect current links with list_pull_request_work_items or discover candidates with query_work_items. Show the user the exact work-item IDs and titles, ask whether to link them, and call this tool only after explicit confirmation. This changes remote work items; confirm must be true. For items in another project within the same Azure DevOps organization, keep project as the pull request repository project and set workItemProject to the project that owns the work items. Existing links are preserved and duplicate IDs are skipped.',
+			inputSchema: z.object({
+				...repositorySchema,
+				pullRequestId: z.number().int().positive().describe('Azure DevOps pull request ID that will receive the work-item links.'),
+				workItemIds: z.array(z.number().int().positive()).min(1).describe('Exact work-item IDs approved by the user for linking.'),
+				workItemProject: z.string().min(1).optional().describe('Project that owns the work items. Omit when it is the same as the pull request repository project.'),
+				confirm: z.literal(true).describe('Set only after the user explicitly confirms linking these specific work-item IDs.'),
+			}),
+		},
+		async ({ organization, project, repository, pullRequestId, workItemIds, workItemProject }) => {
+			const result = await linkPullRequestWorkItems(organization, project, repository, pullRequestId, workItemIds, workItemProject);
+			const workItems = await listPullRequestWorkItems(organization, project, repository, pullRequestId);
+			return { content: [{ type: 'text', text: JSON.stringify({ ...result, workItems }, null, 2) }], structuredContent: { ...result, workItems } };
+		},
+	);
+
+	server.registerTool(
 		'get_pull_request',
 		{
 			description: 'Show an Azure DevOps pull request by ID as an interactive review card with approvals, checkout, and file actions. Call this immediately whenever the user asks to show, open, view, or review a specific pull request; do not ask for confirmation or merely describe the card.',
@@ -905,7 +1075,7 @@ async function main(): Promise<void> {
 	server.registerTool(
 		'submit_pull_request',
 		{
-			description: 'Create a reviewed Azure DevOps pull request. This changes remote state and requires confirm: true.',
+			description: 'Create a reviewed Azure DevOps pull request. First prepare the draft with create_pull_request, let the user review or edit the title and description, then ask for explicit confirmation before calling. This changes remote state. When workItemIds are supplied, confirm that the user also approves linking those exact IDs; use query_work_items first when candidates need to be found. Set workItemProject when the approved items belong to another project in the same Azure DevOps organization.',
 			inputSchema: z.object({
 				...repositorySchema,
 				sourceRef: z.string().startsWith('refs/heads/'),
@@ -913,7 +1083,9 @@ async function main(): Promise<void> {
 				title: z.string().min(1).max(255),
 				description: z.string(),
 				reviewerIds: z.array(z.string().min(1)).default([]),
-				confirm: z.literal(true).describe('Must be true to create the pull request.'),
+				workItemIds: z.array(z.number().int().positive()).default([]).describe('Optional exact work-item IDs approved by the user for linking after the pull request is created.'),
+				workItemProject: z.string().min(1).optional().describe('Project that owns workItemIds. Omit when it is the same as the pull request repository project.'),
+				confirm: z.literal(true).describe('Set only after the user explicitly confirms creation and any supplied work-item links.'),
 			}),
 			_meta: {
 				ui: { visibility: ['model', 'app'], resourceUri: pullRequestReviewCardUri },
@@ -921,7 +1093,7 @@ async function main(): Promise<void> {
 				'ui/resourceUri': pullRequestReviewCardUri,
 			},
 		},
-		async ({ organization, project, repository, sourceRef, targetRef, title, description, reviewerIds }) => {
+		async ({ organization, project, repository, sourceRef, targetRef, title, description, reviewerIds, workItemIds, workItemProject }) => {
 			const pullRequest = await (await getGitApi(organization)).createPullRequest({
 				sourceRefName: sourceRef,
 				targetRefName: targetRef,
@@ -929,6 +1101,9 @@ async function main(): Promise<void> {
 				description,
 				reviewers: reviewerIds.map(id => ({ id })),
 			}, repository, project);
+			if (workItemIds.length > 0) {
+				await linkPullRequestWorkItems(organization, project, repository, pullRequest.pullRequestId!, workItemIds, workItemProject);
+			}
 			await removePullRequestDraftByKey(
 				pullRequestDraftStateKey({ organization, project, repository, sourceRef, targetRef, title }),
 				{ submitted: true },

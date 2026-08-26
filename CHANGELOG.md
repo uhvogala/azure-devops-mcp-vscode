@@ -4,6 +4,37 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.77]
+
+- Match the chat review root layout to the Activity Bar by removing its chat-only outer panel.
+
+## [0.0.76]
+
+- Restore the chat card's two-tone hierarchy by using the chat surface around the widget card.
+
+## [0.0.75]
+
+- Match the chat card document canvas to the card surface to remove its visible dark frame.
+
+## [0.0.74]
+
+- Let chat pull request cards use the full host width and keep compact file actions inside their rows.
+
+## [0.0.73]
+
+- Use one theme-aware stylesheet for chat and Activity Bar pull request cards, including compact changed-file rows.
+
+## [0.0.72]
+
+- Support work-item discovery and linking across authorized Azure DevOps projects.
+- Show linked work items in chat and Activity Bar pull request review cards with browser links to Azure DevOps work-item pages.
+- Prompt agents to offer optional work-item linking when it improves pull request traceability.
+- Derive MCP runtime versions from package metadata and keep the review-card resource URI stable.
+
+## [0.0.71]
+
+- Add MCP tools to query project work items, inspect pull request work-item links, and link approved work items when creating or updating a pull request.
+
 ## [0.0.70]
 
 - Refresh Azure DevOps access tokens from the active VS Code Microsoft session so expired MCP credentials recover without reloading VS Code.

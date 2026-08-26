@@ -2,6 +2,11 @@ function reviewChanged(review, nextReview) {
 	if (nextReview.sourceCommit !== review.sourceCommit || nextReview.targetCommit !== review.targetCommit) {
 		return true;
 	}
+	const previousWorkItemIds = new Set((review.workItems ?? []).map(workItem => workItem.id));
+	const nextWorkItemIds = new Set((nextReview.workItems ?? []).map(workItem => workItem.id));
+	if (previousWorkItemIds.size !== nextWorkItemIds.size || [...nextWorkItemIds].some(id => !previousWorkItemIds.has(id))) {
+		return true;
+	}
 	if (nextReview.changes.length !== review.changes.length) {
 		return true;
 	}
