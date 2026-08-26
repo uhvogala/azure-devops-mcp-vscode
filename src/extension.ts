@@ -494,6 +494,7 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 		private readonly checkoutBranch: (arguments_: CheckoutPullRequestBranchArguments) => Promise<string>,
 		private readonly getWorkspaceRepositoryContext: () => Promise<WorkspaceRepositoryContext>,
 		private readonly sharedState: SharedWorkspaceStateStore,
+		private readonly getAccessToken: () => Promise<string>,
 	) {
 	}
 
@@ -505,6 +506,7 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 			AZURE_DEVOPS_CHECKOUT_BRANCH_URL: `http://127.0.0.1:${port}/checkout-pull-request-branch`,
 			AZURE_DEVOPS_SHARED_STATE_URL: `http://127.0.0.1:${port}/shared-state`,
 			AZURE_DEVOPS_WORKSPACE_CONTEXT_URL: `http://127.0.0.1:${port}/workspace-repositories`,
+			AZURE_DEVOPS_ACCESS_TOKEN_URL: `http://127.0.0.1:${port}/access-token`,
 			AZURE_DEVOPS_DIFF_COMMAND_TOKEN: this.token,
 		};
 	}
@@ -563,6 +565,11 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 			if (request.url === '/workspace-repositories') {
 				response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
 					.end(JSON.stringify(await this.getWorkspaceRepositoryContext()));
+				return;
+			}
+			if (request.url === '/access-token') {
+				response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+					.end(JSON.stringify({ accessToken: await this.getAccessToken() }));
 				return;
 			}
 			if (request.url === '/shared-state' && isSharedStateRequest(arguments_)) {
@@ -1200,6 +1207,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		checkoutPullRequestBranch,
 		workspaceRepositoryContext,
 		sharedState,
+		() => authentication.getAccessToken(),
 	);
 	context.subscriptions.push(sharedState.onDidChange(change => {
 		void reviewWebview?.webview.postMessage({ type: 'sharedStateChanged', change });
@@ -1339,10 +1347,7 @@ export function activate(context: vscode.ExtensionContext): void {
 					return undefined;
 				}
 
-				server.env = {
-					...await authentication.getServerEnvironment(),
-					...await commandBridge.getServerEnvironment(),
-				};
+				server.env = await commandBridge.getServerEnvironment();
 				return server;
 			},
 		}),

@@ -104,8 +104,30 @@ function requiredEnvironment(name: string): string {
 }
 
 function createTokenProvider(): () => Promise<string> {
-	const accessToken = requiredEnvironment('AZURE_DEVOPS_ACCESS_TOKEN');
-	return async () => accessToken;
+	const accessTokenUrl = process.env.AZURE_DEVOPS_ACCESS_TOKEN_URL;
+	if (!accessTokenUrl) {
+		const accessToken = requiredEnvironment('AZURE_DEVOPS_ACCESS_TOKEN');
+		return async () => accessToken;
+	}
+	const commandToken = requiredEnvironment('AZURE_DEVOPS_DIFF_COMMAND_TOKEN');
+	return async () => {
+		const response = await fetch(accessTokenUrl, {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${commandToken}`,
+				'Content-Type': 'application/json',
+			},
+			body: '{}',
+		});
+		if (!response.ok) {
+			throw new Error(`Unable to obtain an Azure DevOps access token (${response.status}).`);
+		}
+		const payload: unknown = await response.json();
+		if (!payload || typeof payload !== 'object' || typeof (payload as { accessToken?: unknown }).accessToken !== 'string') {
+			throw new Error('The Azure DevOps access token response was invalid.');
+		}
+		return (payload as { accessToken: string }).accessToken;
+	};
 }
 
 function pullRequestSummary(pullRequest: GitPullRequest): Record<string, unknown> {

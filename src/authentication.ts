@@ -11,10 +11,13 @@ export class AzureDevOpsAuthentication {
 		vscode.window.showInformationMessage(`Azure DevOps PRs (MCP) is signed in as ${session.account.label}.`);
 	}
 
+	public async getAccessToken(): Promise<string> {
+		return (await this.getSession()).accessToken;
+	}
+
 	public async getServerEnvironment(): Promise<Record<string, string>> {
-		const session = await this.getSession();
 		return {
-			AZURE_DEVOPS_ACCESS_TOKEN: session.accessToken,
+			AZURE_DEVOPS_ACCESS_TOKEN: await this.getAccessToken(),
 		};
 	}
 

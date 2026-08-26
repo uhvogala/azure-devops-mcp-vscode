@@ -4,6 +4,10 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.70]
+
+- Refresh Azure DevOps access tokens from the active VS Code Microsoft session so expired MCP credentials recover without reloading VS Code.
+
 ## [0.0.69]
 
 - Redesign pull request review cards with VS Code-native surfaces, compact approval rows, and inline checkoutable branch links.

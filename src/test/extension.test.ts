@@ -54,6 +54,7 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			},
 			async () => workspaceContext,
 			sharedState,
+			async () => 'current-access-token',
 		);
 
 		try {
@@ -108,6 +109,14 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			});
 			assert.strictEqual(workspaceResponse.status, 200);
 			assert.deepStrictEqual(await workspaceResponse.json(), workspaceContext);
+
+			const tokenResponse = await fetch(environment.AZURE_DEVOPS_ACCESS_TOKEN_URL, {
+				method: 'POST',
+				headers,
+				body: '{}',
+			});
+			assert.strictEqual(tokenResponse.status, 200);
+			assert.deepStrictEqual(await tokenResponse.json(), { accessToken: 'current-access-token' });
 
 			const stateResponse = await fetch(environment.AZURE_DEVOPS_SHARED_STATE_URL, {
 				method: 'POST',
