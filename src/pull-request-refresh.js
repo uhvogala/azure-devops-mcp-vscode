@@ -1,3 +1,17 @@
+function reviewChanged(review, nextReview) {
+	if (nextReview.sourceCommit !== review.sourceCommit || nextReview.targetCommit !== review.targetCommit) {
+		return true;
+	}
+	if (nextReview.changes.length !== review.changes.length) {
+		return true;
+	}
+	const previousChanges = new Map(review.changes.map(change => [change.path, change]));
+	return nextReview.changes.some(change => {
+		const previous = previousChanges.get(change.path);
+		return !previous || previous.commentCount !== change.commentCount;
+	});
+}
+
 export function subscribeToPullRequestRefresh(review, loadReview, onRefresh, intervalMs = 15_000) {
 	let active = true;
 	let loading = false;
@@ -8,8 +22,7 @@ export function subscribeToPullRequestRefresh(review, loadReview, onRefresh, int
 		loading = true;
 		try {
 			const nextReview = await loadReview();
-			if (active && nextReview
-				&& (nextReview.sourceCommit !== review.sourceCommit || nextReview.targetCommit !== review.targetCommit)) {
+			if (active && nextReview && reviewChanged(review, nextReview)) {
 				onRefresh(nextReview);
 			}
 		} catch {

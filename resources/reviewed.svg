@@ -1,0 +1,9 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Reviewed">
+<path id="Vector" d="M12.5 2.5H3.5C2.94772 2.5 2.5 2.94772 2.5 3.5V12.5C2.5 13.0523 2.94772 13.5 3.5 13.5H12.5C13.0523 13.5 13.5 13.0523 13.5 12.5V3.5C13.5 2.94772 13.0523 2.5 12.5 2.5Z" fill="#0E639C"/>
+<g id="Vector_2">
+<path d="M5 8L7 10L11 6" fill="black"/>
+<path d="M5 8L7 10L11 6" stroke="white" stroke-width="1.5"/>
+</g>
+</g>
+</svg>

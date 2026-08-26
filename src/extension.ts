@@ -103,23 +103,29 @@ function repositoryRefreshStateKey(repository: WorkspaceRepository): string {
 
 function reviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 	const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', 'pr-overview.js'));
+	const reviewAssets = Object.fromEntries(Object.entries({
+		notReviewed: 'not-reviewed.svg',
+		openDiff: 'open-diff.svg',
+		openFile: 'open-file.svg',
+		reviewed: 'reviewed.svg',
+	}).map(([name, file]) => [name, webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', file)).toString()]));
 	const nonce = randomBytes(16).toString('hex');
 	return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
 <style>
-:root { color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
+:root { --review-surface-radius: var(--vscode-cornerRadius-large, 8px); color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
 html, body, main { height: 100%; } body { margin: 0; overflow: hidden; } .review-host, .review-host *, .review-host *::before, .review-host *::after { box-sizing: border-box; }
-.review-host { width: 100%; height: 100%; overflow: auto; padding: 12px; } .review-host.is-loading { opacity: .65; pointer-events: none; } .terminal-state { display: grid; min-height: 160px; place-items: center; padding: 16px; border: 1px solid var(--vscode-panel-border); color: var(--vscode-descriptionForeground); text-align: center; }
-.header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; } h1, h2 { margin: 0; } h1 { font-size: 15px; line-height: 1.35; } h2 { font-size: 12px; } .number, .files-header span, .file-details span, .approvals-count, .reviewer-vote { color: var(--vscode-descriptionForeground); font-size: 11px; }
-.status { padding: 3px 6px; background: var(--vscode-testing-iconPassed); color: var(--vscode-editor-background); font-size: 10px; font-weight: 700; text-transform: uppercase; }
-.branches { display: grid; gap: 6px; width: 100%; margin-top: 12px; padding: 6px 8px; border-left: 3px solid var(--vscode-focusBorder); background: var(--vscode-editorWidget-background); overflow-wrap: anywhere; } .branch-actions { display: flex; flex-wrap: wrap; gap: 6px; } .branch-error, .approval-error, .action-error { color: var(--vscode-errorForeground); font-size: 11px; overflow-wrap: anywhere; } .branch-error:empty { display: none; } .checkout-branch { padding: 4px 8px; min-height: 24px; font-size: 11px; }
-.approvals, .summary, .files { width: 100%; margin-top: 16px; } .approvals-header, .reviewer, .files-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; } .approval-list { display: grid; gap: 4px; margin-top: 8px; } .reviewer { padding: 6px 8px; border-left: 3px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background); font-size: 12px; } .reviewer-name { min-width: 0; overflow-wrap: anywhere; } .approval-actions { display: flex; margin-top: 12px; } .draft-status { background: var(--vscode-charts-blue); } .draft-description, .draft-files { margin-top: 16px; } .draft-description-header, .draft-details { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; } .preview-control { display: inline-flex; align-items: center; gap: 5px; color: var(--vscode-descriptionForeground); font-size: 11px; cursor: pointer; } .description-input { width: 100%; min-height: 130px; resize: vertical; padding: 8px; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); font: inherit; } .description-preview { min-height: 130px; padding: 8px; border: 1px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background); } .draft-files { border: 1px solid var(--vscode-panel-border); } .draft-file, .draft-file-empty { display: flex; justify-content: space-between; gap: 8px; padding: 7px 8px; border-top: 1px solid var(--vscode-panel-border); } .draft-file span, .draft-file-empty { color: var(--vscode-descriptionForeground); font-size: 11px; } .draft-file-empty { display: block; } .draft-details { justify-content: flex-start; margin-top: 10px; flex-wrap: wrap; } .draft-details > span:first-child { color: var(--vscode-descriptionForeground); font-size: 11px; }
-.section-title { margin-bottom: 7px; color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: uppercase; } .markdown { line-height: 1.45; } .markdown p { margin: 0 0 8px; } .markdown code, code { font-family: var(--vscode-editor-font-family); }
-.files { border: 1px solid var(--vscode-panel-border); overflow: hidden; } .files-header { padding: 8px; background: var(--vscode-editorWidget-background); } .file { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; margin: 0; padding: 8px; border: 0; border-top: 1px solid var(--vscode-panel-border); } .file-details { min-width: 0; display: grid; align-content: center; gap: 3px; } .file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .file-actions { display: flex; align-items: center; gap: 6px; } .review-control { display: inline-flex; align-items: center; gap: 4px; color: var(--vscode-descriptionForeground); font-size: 11px; }
-button { min-height: 28px; border: 1px solid var(--vscode-button-border, transparent); border-radius: var(--vscode-button-border-radius, 4px); padding: 5px 8px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; } button:hover { background: var(--vscode-button-hoverBackground); } button:disabled { opacity: .7; cursor: progress; } .checkout-branch, .open-file { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); } .comment-count { min-height: auto; justify-self: start; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--vscode-textLink-foreground); font-size: 11px; text-decoration: underline; }
-@media (max-width: 540px) { .file { grid-template-columns: 72px minmax(0, 1fr); } .file-actions { grid-column: 2; flex-wrap: wrap; } }
-</style></head><body><script nonce="${nonce}" src="${scriptUri}"></script></body></html>`;
+.review-host { width: 100%; height: 100%; overflow: auto; padding: 12px; } .review-host.is-loading { opacity: .65; pointer-events: none; } .terminal-state { display: grid; min-height: 160px; place-items: center; padding: 16px; border: 1px solid var(--vscode-panel-border); border-radius: var(--review-surface-radius); color: var(--vscode-descriptionForeground); text-align: center; }
+.header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; } h1, h2 { margin: 0; } h1 { font-size: 17px; line-height: 23px; } h2 { font-size: 12px; } .number, .files-header span, .file-details span, .approvals-count, .reviewer-vote { color: var(--vscode-descriptionForeground); font-size: 11px; }
+.status { padding: 3px 6px; border: 0; background: var(--vscode-list-inactiveSelectionBackground); color: var(--vscode-testing-iconPassed); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.branches { display: flex; align-items: flex-start; gap: 7px; width: 100%; margin-top: 12px; padding: 9px 10px; border: 1px solid var(--vscode-panel-border); border-radius: var(--review-surface-radius); background: var(--vscode-editorWidget-background); } .branch-flow, .branch-control { display: inline-flex; align-items: center; min-width: 0; overflow-wrap: anywhere; } .branch-flow { gap: 7px; } .branch-control { gap: 4px; } .branch-link { min-width: 0; padding: 0; border: 0; background: transparent; color: var(--vscode-textLink-foreground); font: inherit; font-size: 12px; cursor: pointer; } .branch-link:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; } .branch-link:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; } .branch-link.is-current { color: var(--vscode-textLink-foreground); cursor: default; } .branch-link.is-checking-out { cursor: progress; opacity: .7; } .branch-separator { color: var(--vscode-descriptionForeground); } .current-branch-mark { color: var(--vscode-testing-iconPassed); font-size: 12px; line-height: 16px; } .branch-error, .approval-error, .action-error { color: var(--vscode-errorForeground); font-size: 11px; overflow-wrap: anywhere; } .branch-error:empty { display: none; }
+.approvals, .summary, .files { width: 100%; margin-top: 12px; } .approvals-header, .reviewer, .files-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; } .approvals-header { margin-bottom: 12px; } .approvals-header .section-title, .section-heading .section-title { margin: 0; } .approval-list { display: grid; overflow: hidden; border-radius: var(--review-surface-radius); } .reviewer { padding: 7px 10px; border-bottom: 1px solid var(--vscode-panel-border); background: var(--vscode-editorWidget-background); font-size: 12px; } .reviewer:last-child { border-bottom: 0; } .reviewer-name { min-width: 0; overflow-wrap: anywhere; } .approval-actions { display: flex; margin-top: 12px; } .draft-status { color: var(--vscode-textLink-foreground); } .draft-description, .draft-files { margin-top: 16px; } .draft-description-header, .draft-details { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; } .preview-control { display: inline-flex; align-items: center; gap: 5px; color: var(--vscode-descriptionForeground); font-size: 11px; cursor: pointer; } .description-input { width: 100%; min-height: 130px; resize: vertical; padding: 8px; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); font: inherit; } .description-preview { min-height: 130px; padding: 8px; border: 1px solid var(--vscode-panel-border); border-radius: var(--review-surface-radius); background: var(--vscode-editorWidget-background); } .draft-files { overflow: hidden; border: 1px solid var(--vscode-panel-border); border-radius: var(--review-surface-radius); } .draft-file, .draft-file-empty { display: flex; justify-content: space-between; gap: 8px; padding: 7px 8px; border-top: 1px solid var(--vscode-panel-border); } .draft-file span, .draft-file-empty { color: var(--vscode-descriptionForeground); font-size: 11px; } .draft-file-empty { display: block; } .draft-details { justify-content: flex-start; margin-top: 10px; flex-wrap: wrap; } .draft-details > span:first-child { color: var(--vscode-descriptionForeground); font-size: 11px; }
+.section-title { margin-bottom: 12px; color: var(--vscode-descriptionForeground); font-size: 11px; text-transform: none; } .markdown { font-size: 12px; line-height: 18px; } .markdown p { margin: 0 0 6px; } .markdown code, code { font-family: var(--vscode-font-family); }
+.files { overflow: visible; } .section-heading { display: flex; align-items: center; min-height: 16px; margin-bottom: 12px; } .file-list { overflow: hidden; border: 1px solid var(--vscode-panel-border); border-radius: var(--review-surface-radius); background: var(--vscode-editorWidget-background); } .files-header { min-height: 34px; padding: 9px 10px; background: var(--vscode-editorWidget-background); } .file { display: grid; grid-template-columns: 16px minmax(0, 1fr) 58px; min-height: 50px; align-items: center; gap: 8px; width: 100%; margin: 0; padding: 8px 8px 8px 10px; border: 0; border-top: 1px solid var(--vscode-panel-border); } .file:has(input:checked) { background: var(--vscode-list-inactiveSelectionBackground); } .file-details { min-width: 0; display: grid; align-content: center; gap: 2px; } .file code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .file-metadata { display: flex; align-items: center; gap: 6px; min-width: 0; } .change-kind.change-added { color: var(--vscode-gitDecoration-addedResourceForeground, #89d185); } .change-kind.change-modified, .change-kind.change-renamed { color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d); } .change-kind.change-deleted { color: var(--vscode-gitDecoration-deletedResourceForeground, #f48771); } .file-actions { display: grid; grid-template-columns: repeat(2, 28px); gap: 2px; } button.file-action { display: grid; place-items: center; width: 28px; min-height: 28px; padding: 0; border: 0; background: var(--vscode-editorWidget-background); } button.file-action:hover { background: var(--vscode-toolbar-hoverBackground); } .file-action-icon, .review-icon { display: block; width: 16px; height: 16px; } .review-control { position: relative; display: grid; place-items: center; width: 16px; height: 16px; cursor: pointer; } .review-control input { position: absolute; opacity: 0; cursor: pointer; } .review-control:has(input:focus-visible) { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; } .review-control input:disabled, .review-control input:disabled + .review-icon { cursor: progress; } .action-error:empty { display: none; }
+button { min-height: 28px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 3px; padding: 5px 10px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; } button:hover { background: var(--vscode-button-hoverBackground); } button:disabled { opacity: .7; cursor: progress; } .comment-count { min-height: auto; justify-self: start; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--vscode-textLink-foreground); font-size: 11px; text-decoration: none; }
+@media (max-width: 540px) { .file { gap: 6px; } }
+</style></head><body><script nonce="${nonce}">globalThis.__azureDevOpsMcpReviewAssets = ${JSON.stringify(reviewAssets)};</script><script nonce="${nonce}" src="${scriptUri}"></script></body></html>`;
 }
 
 interface OpenPullRequestFileDiffArguments {
@@ -636,6 +642,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			...thread.comments,
 			azureComment(comment.content ?? text.trim(), comment.author?.displayName ?? 'Azure DevOps user', comment.publishedDate),
 		];
+		await publishPullRequestCommentChange(reference);
 	};
 	const renderPullRequestComments = async (arguments_: PullRequestCommentDocumentReference, uri: vscode.Uri, side: 'left' | 'right'): Promise<void> => {
 		const key = uri.toString();
@@ -699,6 +706,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			},
 		}, reference.repository, reference.pullRequestId, reference.project);
 		await renderPullRequestComments(reference, uri, 'right');
+		await publishPullRequestCommentChange(reference);
 	};
 	const openPullRequestFileDiff = async (arguments_: OpenPullRequestFileDiffArguments): Promise<void> => {
 		const isAdded = (arguments_.changeType & VersionControlChangeType.Add) !== 0;
@@ -784,6 +792,13 @@ export function activate(context: vscode.ExtensionContext): void {
 	const sharedState = new SharedWorkspaceStateStore(context.workspaceState);
 	context.subscriptions.push(sharedState);
 	const reviewStateStore = new PullRequestReviewStateStore(sharedState);
+	const publishPullRequestCommentChange = async ({ organization, project, repository, pullRequestId }: PullRequestReviewStateArguments): Promise<void> => {
+		await sharedState.update<Record<string, unknown>>(repositoryRefreshStateKey({ organization, project, repository }), {}, value => ({
+			...value,
+			changedAt: Date.now(),
+			pullRequestId,
+		}));
+	};
 	let reviewWebview: vscode.WebviewView | undefined;
 	let selectedOverviewRepositoryKey = context.workspaceState.get<string>('azure-devops-mcp.overview.repository');
 	let selectedOverviewPullRequestId: number | undefined;
@@ -992,15 +1007,15 @@ export function activate(context: vscode.ExtensionContext): void {
 		getChildren: element => {
 			if (!element) {
 				const items: vscode.TreeItem[] = [];
-				if (treeLoading) {
+				if (treeLoading && !treeRepository) {
 					const loadingItem = new vscode.TreeItem('Loading pull requests...', vscode.TreeItemCollapsibleState.None);
 					loadingItem.iconPath = new vscode.ThemeIcon('loading~spin');
 					items.push(loadingItem);
 				}
 				if (treeRepository) {
 					const repositoryItem = new vscode.TreeItem(treeRepository.repository, vscode.TreeItemCollapsibleState.Expanded);
-					repositoryItem.description = `${treeRepository.organization}/${treeRepository.project}`;
-					repositoryItem.iconPath = new vscode.ThemeIcon('repo');
+					repositoryItem.description = `${treeRepository.organization}/${treeRepository.project}${treeLoading ? ' Loading...' : ''}`;
+					repositoryItem.iconPath = new vscode.ThemeIcon(treeLoading ? 'loading~spin' : 'repo');
 					repositoryItem.command = { command: selectOverviewRepositoryCommand, title: 'Select Pull Request Repository' };
 					repositoryItem.contextValue = 'azure-devops-mcp.repository';
 					items.push(repositoryItem);
@@ -1038,7 +1053,13 @@ export function activate(context: vscode.ExtensionContext): void {
 	const reviewProvider: vscode.WebviewViewProvider = {
 		resolveWebviewView: view => {
 			reviewWebview = view;
-			view.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'dist')] };
+			view.webview.options = {
+				enableScripts: true,
+				localResourceRoots: [
+					vscode.Uri.joinPath(context.extensionUri, 'dist'),
+					vscode.Uri.joinPath(context.extensionUri, 'resources'),
+				],
+			};
 			view.webview.html = reviewHtml(view.webview, context.extensionUri);
 			view.webview.onDidReceiveMessage(async (message: unknown) => {
 				if (!message || typeof message !== 'object') {

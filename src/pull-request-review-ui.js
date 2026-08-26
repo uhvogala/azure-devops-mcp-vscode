@@ -14,6 +14,24 @@ export function changeLabel(changeType) {
 	return 'Modified';
 }
 
+function changeClass(changeType) {
+	if ((changeType & 1) !== 0) {return 'change-added';}
+	if ((changeType & 16) !== 0) {return 'change-deleted';}
+	if ((changeType & 8) !== 0) {return 'change-renamed';}
+	return 'change-modified';
+}
+
+function normalizedBranchName(branch) {
+	return branch?.trim()
+		.replace(/^refs\/heads\//, '')
+		.replace(/^refs\/remotes\/origin\//, '')
+		.replace(/^origin\//, '');
+}
+
+function reviewAsset(name) {
+	return globalThis.__azureDevOpsMcpReviewAssets?.[name] ?? '';
+}
+
 export function applyReviewedPaths(review, value) {
 	if (!Array.isArray(value)) {
 		return;
@@ -71,29 +89,49 @@ export function renderPullRequestReview(root, review, callAction) {
 	header.append(identity, status);
 
 	const branches = element('div', 'branches');
-	const branchName = element('span', 'branch-name');
-	branchName.textContent = `${review.sourceRef.replace('refs/heads/', '')} -> ${review.targetRef.replace('refs/heads/', '')}`;
-	const branchActions = element('div', 'branch-actions');
+	const branchFlow = element('div', 'branch-flow');
 	const branchError = element('span', 'branch-error');
-	for (const [label, branch] of [['Checkout source', review.sourceRef], ['Checkout target', review.targetRef]]) {
-		const button = element('button', 'checkout-branch');
-		button.type = 'button';
-		button.textContent = review.currentBranch === branch.replace('refs/heads/', '') ? 'Current branch' : label;
-		button.addEventListener('click', async () => {
-			button.disabled = true;
-			button.textContent = 'Checking out...';
-			branchError.textContent = '';
-			const result = await run('checkout_pull_request_branch', { organization: review.organization, project: review.project, repository: review.repository, branch }, branchError);
-			if (result?.structuredContent?.currentBranch) {
-				review.currentBranch = result.structuredContent.currentBranch;
-				renderPullRequestReview(root, review, callAction);
-				return;
-			}
-			button.disabled = false;
-		});
-		branchActions.append(button);
+	const checkoutBranch = async (button, branch, resetText) => {
+		button.disabled = true;
+		button.classList.add('is-checking-out');
+		branchError.textContent = '';
+		const result = await run('checkout_pull_request_branch', { organization: review.organization, project: review.project, repository: review.repository, branch }, branchError);
+		if (result?.structuredContent?.currentBranch) {
+			review.currentBranch = result.structuredContent.currentBranch;
+			renderPullRequestReview(root, review, callAction);
+			return;
+		}
+		button.disabled = false;
+		button.classList.remove('is-checking-out');
+		button.textContent = resetText;
+	};
+	for (const [branch, label] of [[review.sourceRef, 'source'], [review.targetRef, 'target']]) {
+		const branchName = normalizedBranchName(branch);
+		const isCurrent = normalizedBranchName(review.currentBranch) === branchName;
+		const branchControl = element('span', 'branch-control');
+		const branchItem = element(isCurrent ? 'span' : 'button', `branch-link${isCurrent ? ' is-current' : ''}`);
+		branchItem.textContent = branchName;
+		branchItem.title = isCurrent ? 'Current branch' : `Check out ${branchName}`;
+		if (!isCurrent) {
+			branchItem.type = 'button';
+			branchItem.setAttribute('aria-label', `Check out ${label} branch ${branchName}`);
+			branchItem.addEventListener('click', () => checkoutBranch(branchItem, branch, branchName));
+		}
+		branchControl.append(branchItem);
+		if (isCurrent) {
+			const currentMark = element('span', 'current-branch-mark');
+			currentMark.textContent = '\u2713';
+			currentMark.title = 'Current branch';
+			branchControl.append(currentMark);
+		}
+		branchFlow.append(branchControl);
+		if (branch === review.sourceRef) {
+			const separator = element('span', 'branch-separator');
+			separator.textContent = '\u2192';
+			branchFlow.append(separator);
+		}
 	}
-	branches.append(branchName, branchActions, branchError);
+	branches.append(branchFlow, branchError);
 
 	const approvals = element('section', 'approvals');
 	const approvalsHeader = element('div', 'approvals-header');
@@ -145,13 +183,20 @@ export function renderPullRequestReview(root, review, callAction) {
 	summary.append(summaryTitle, summaryText);
 
 	const files = element('section', 'files');
+	const filesSectionHeader = element('div', 'section-heading');
+	const filesSectionTitle = element('h2', 'section-title');
+	filesSectionTitle.textContent = 'Changed files';
+	filesSectionHeader.append(filesSectionTitle);
+	const fileList = element('div', 'file-list');
 	const filesHeader = element('div', 'files-header');
 	const filesTitle = element('h2');
 	filesTitle.textContent = 'Changed files';
 	const filesCount = element('span');
-	filesCount.textContent = review.changesTruncated ? `${review.changes.length}+ files` : `${review.changes.length} files`;
+	const reviewedCount = review.changes.filter(change => change.reviewed).length;
+	const fileCount = review.changesTruncated ? `${review.changes.length}+` : review.changes.length;
+	filesCount.textContent = `${fileCount} files \u00b7 ${reviewedCount} reviewed`;
 	filesHeader.append(filesTitle, filesCount);
-	files.append(filesHeader);
+	fileList.append(filesHeader);
 	for (const change of review.changes) {
 		const row = element('div', 'file');
 		const control = element('label', 'review-control');
@@ -159,36 +204,52 @@ export function renderPullRequestReview(root, review, callAction) {
 		checkbox.type = 'checkbox';
 		checkbox.checked = change.reviewed === true;
 		checkbox.setAttribute('aria-label', `Mark ${change.path} as reviewed`);
-		control.append(checkbox, 'Reviewed');
+		control.title = `Mark ${change.path} as reviewed`;
+		const reviewIcon = element('img', 'review-icon');
+		reviewIcon.src = reviewAsset(change.reviewed ? 'reviewed' : 'notReviewed');
+		reviewIcon.alt = '';
+		control.append(checkbox, reviewIcon);
 		const details = element('div', 'file-details');
 		const path = element('code');
 		path.textContent = change.path;
 		path.title = change.path;
-		const kind = element('span');
+		const metadata = element('div', 'file-metadata');
+		const kind = element('span', `change-kind ${changeClass(change.changeType)}`);
 		kind.textContent = changeLabel(change.changeType);
-		const comments = element('button', 'comment-count');
-		comments.type = 'button';
-		comments.textContent = change.commentCount ? `${change.commentCount} comment${change.commentCount === 1 ? '' : 's'}` : '';
+		metadata.append(kind);
+		if (change.commentCount) {
+			const comments = element('button', 'comment-count');
+			comments.type = 'button';
+			comments.textContent = `${change.commentCount} comment${change.commentCount === 1 ? '' : 's'}`;
+			comments.addEventListener('click', () => run('open_pull_request_file_diff', change, error));
+			metadata.append(comments);
+		}
 		const error = element('span', 'action-error');
-		details.append(path, kind, comments, error);
+		details.append(path, metadata, error);
 		checkbox.addEventListener('change', async () => {
 			checkbox.disabled = true;
 			const result = await run('set_pull_request_file_reviewed', { organization: review.organization, project: review.project, repository: review.repository, pullRequestId: review.id, path: change.path, reviewed: checkbox.checked }, error);
 			if (!result) {checkbox.checked = !checkbox.checked;}
 			else {change.reviewed = checkbox.checked;}
+			reviewIcon.src = reviewAsset(checkbox.checked ? 'reviewed' : 'notReviewed');
 			checkbox.disabled = false;
 		});
-		comments.addEventListener('click', () => run('open_pull_request_file_diff', change, error));
 		const actions = element('div', 'file-actions');
-		for (const [label, name, arguments_] of [['Open diff', 'open_pull_request_file_diff', change], ['Open file', 'open_pull_request_file', { organization: change.organization, project: change.project, repository: change.repository, path: change.path }]]) {
-			const button = element('button', name === 'open_pull_request_file' ? 'open-file' : '');
+		for (const [label, icon, name, arguments_] of [['Open diff', 'openDiff', 'open_pull_request_file_diff', change], ['Open file', 'openFile', 'open_pull_request_file', { organization: change.organization, project: change.project, repository: change.repository, path: change.path }]]) {
+			const button = element('button', `file-action${name === 'open_pull_request_file' ? ' open-file' : ''}`);
 			button.type = 'button';
-			button.textContent = label;
+			button.title = label;
+			button.setAttribute('aria-label', label);
+			const actionIcon = element('img', 'file-action-icon');
+			actionIcon.src = reviewAsset(icon);
+			actionIcon.alt = '';
+			button.append(actionIcon);
 			button.addEventListener('click', () => run(name, arguments_, error));
 			actions.append(button);
 		}
 		row.append(control, details, actions);
-		files.append(row);
+		fileList.append(row);
 	}
+	files.append(filesSectionHeader, fileList);
 	root.append(header, branches, approvals, summary, files);
 }

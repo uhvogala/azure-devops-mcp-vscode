@@ -4,6 +4,15 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.69]
+
+- Redesign pull request review cards with VS Code-native surfaces, compact approval rows, and inline checkoutable branch links.
+
+## [0.0.68]
+
+- Keep Activity Bar loading status within the selected repository row.
+- Compact changed-file rows into stable review, metadata, and icon-action columns at all widths.
+
 ## [0.0.67]
 
 - Center deleted, submitted, and no-selection status messages in pull request cards.

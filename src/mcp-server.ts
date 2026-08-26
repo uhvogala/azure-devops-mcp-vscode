@@ -242,6 +242,22 @@ async function setSharedState(key: string, value: unknown, expectedVersion?: num
 	return body as SharedStateWriteResult;
 }
 
+async function publishPullRequestCommentChange({ organization, project, repository, pullRequestId }: PullRequestReviewStateArguments): Promise<void> {
+	const key = repositoryRefreshStateKey({ organization, project, repository, pullRequestId });
+	for (;;) {
+		const state = await getSharedState(key, {});
+		const value = state.value && typeof state.value === 'object' ? state.value as Record<string, unknown> : {};
+		const result = await setSharedState(key, {
+			...value,
+			changedAt: Date.now(),
+			pullRequestId,
+		}, state.version);
+		if (result.applied) {
+			return;
+		}
+	}
+}
+
 function draftDescription(value: unknown, fallback: string): string {
 	if (!value || typeof value !== 'object' || typeof (value as { description?: unknown }).description !== 'string') {
 		return fallback;
@@ -587,6 +603,7 @@ async function main(): Promise<void> {
 				} : undefined,
 			};
 			const thread = await (await getGitApi(organization)).createThread(commentThread, repository, pullRequestId, project);
+			await publishPullRequestCommentChange({ organization, project, repository, pullRequestId });
 			return { content: [{ type: 'text', text: JSON.stringify(pullRequestCommentSummary(thread), null, 2) }] };
 		},
 	);
@@ -607,6 +624,7 @@ async function main(): Promise<void> {
 				content,
 				commentType: CommentType.Text,
 			}, repository, pullRequestId, threadId, project);
+			await publishPullRequestCommentChange({ organization, project, repository, pullRequestId });
 			return {
 				content: [{
 					type: 'text',
