@@ -55,11 +55,14 @@ Review, draft, and check out Azure DevOps pull requests directly in GitHub Copil
 
 The extension runs a local [Model Context Protocol](https://modelcontextprotocol.io/) server that gives agents access to these capabilities:
 
+Use `get_pull_request` only when the user asks to display a pull request: it always opens an interactive review card. Use `get_pull_request_summary` for quiet inspection, reloads, and verification after a mutation; it returns JSON without opening a card. `update_pull_request` also returns JSON only, so existing cards refresh through their normal polling cycle rather than opening a duplicate card.
+
 | Tool | Purpose |
 | --- | --- |
 | `get_workspace_repositories` | Discover Azure DevOps repositories in the current workspace. |
 | `list_pull_requests` | List active, completed, abandoned, or all pull requests. |
 | `get_pull_request` | Show a pull request as an interactive review card with changed files. |
+| `get_pull_request_summary` | Read a pull request as JSON without opening an interactive card. |
 | `open_pull_request_file_diff` | Open a changed file in VS Code's native diff editor. |
 | `open_pull_request_file` | Open the matching local workspace file. |
 | `list_pull_request_comments` | List discussion threads and their file and line locations. |
@@ -73,6 +76,7 @@ The extension runs a local [Model Context Protocol](https://modelcontextprotocol
 | `link_pull_request_work_items` | Link selected work items to an existing pull request after explicit confirmation. |
 | `create_pull_request` | Prepare an editable local pull request draft without creating a remote PR. |
 | `submit_pull_request` | Create a remote pull request after explicit confirmation, optionally linking work items. |
+| `update_pull_request` | Update an active pull request's title, description, or target branch after explicit confirmation, without opening a new card. |
 
 ## Pull Request Drafts
 

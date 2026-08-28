@@ -4,6 +4,19 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.80]
+
+- Split card rendering from quiet pull request reads to prevent empty or unintended MCP App views.
+- Add `get_pull_request_summary` for JSON-only inspection, reloads, and mutation verification.
+
+## [0.0.79]
+
+- Refresh active review cards when any displayed pull request content changes, including title, description, status, target branch, reviewers, and work-item details.
+
+## [0.0.78]
+
+- Add `update_pull_request` for confirmed title, description, and target-branch edits to active pull requests.
+
 ## [0.0.77]
 
 - Match the chat review root layout to the Activity Bar by removing its chat-only outer panel.

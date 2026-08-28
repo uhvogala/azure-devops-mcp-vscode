@@ -9,6 +9,7 @@ import {
 	SharedWorkspaceStateStore,
 } from '../extension';
 import { loadPullRequestReview } from '../pull-request-review';
+import { PullRequestRefreshSnapshot, reviewChanged } from '../pull-request-refresh';
 
 
 suite('Azure DevOps PRs (MCP) extension', () => {
@@ -199,6 +200,30 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			{ version: 'merge-base-commit', versionType: GitVersionType.Commit },
 			{ version: 'source-commit', versionType: GitVersionType.Commit },
 		]);
+	});
+
+	test('refreshes a card when any displayed pull request content changes', () => {
+		const review: PullRequestRefreshSnapshot = {
+			title: 'Original title',
+			description: 'Original description',
+			status: 1,
+			sourceRef: 'refs/heads/feature/example',
+			targetRef: 'refs/heads/develop',
+			sourceCommit: 'source-commit',
+			targetCommit: 'target-commit',
+			reviewers: [{ id: 'reviewer-1', displayName: 'Reviewer', vote: 0 }],
+			workItems: [{ id: 123, title: 'Original work item', type: 'Task', state: 'Active' }],
+			changes: [{ path: '/src/example.ts', changeType: 2, commentCount: 0 }],
+		};
+
+		assert.strictEqual(reviewChanged(review, { ...review }), false);
+		assert.strictEqual(reviewChanged(review, { ...review, title: 'Updated title' }), true);
+		assert.strictEqual(reviewChanged(review, { ...review, description: 'Updated description' }), true);
+		assert.strictEqual(reviewChanged(review, { ...review, status: 2 }), true);
+		assert.strictEqual(reviewChanged(review, { ...review, targetRef: 'refs/heads/release' }), true);
+		assert.strictEqual(reviewChanged(review, { ...review, reviewers: [{ id: 'reviewer-1', displayName: 'Reviewer', vote: 10 }] }), true);
+		assert.strictEqual(reviewChanged(review, { ...review, workItems: [{ id: 123, title: 'Original work item', type: 'Task', state: 'Resolved' }] }), true);
+		assert.strictEqual(reviewChanged(review, { ...review, changes: [{ path: '/src/example.ts', changeType: 2, commentCount: 1 }] }), true);
 	});
 
 	test('notifies shared state subscribers with an incremented revision', async () => {

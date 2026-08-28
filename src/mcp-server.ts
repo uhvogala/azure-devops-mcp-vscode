@@ -395,7 +395,7 @@ async function main(): Promise<void> {
 		{ name: 'azure-devops-pull-requests', version: __AZURE_DEVOPS_MCP_VERSION__ },
 		{
 			instructions:
-				'This server manages Azure DevOps pull requests. VS Code reuses its existing Microsoft session: do not invoke the Sign In command routinely; only ask the user to sign in when an operation reports missing or expired authentication. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Whenever the user asks to show, open, view, or review a specific pull request, call get_pull_request immediately (with includeChanges: true, which is the default). Do not ask for confirmation or merely offer to show the card: render the interactive review card with approvals, checkout, and file actions. Use list_pull_requests only when the pull request ID is unknown. When reviewing or preparing a pull request with no linked work items, briefly offer to find and link relevant items when that would help trace the change; do not make this a prerequisite for creating, submitting, or reviewing the pull request. To draft a new pull request, call create_pull_request and present its editable card. Before calling submit_pull_request, ask whether the user wants to change the draft text and wait for explicit confirmation to submit.',
+				'This server manages Azure DevOps pull requests. VS Code reuses its existing Microsoft session: do not invoke the Sign In command routinely; only ask the user to sign in when an operation reports missing or expired authentication. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Call get_pull_request only when the user asks to show, open, view, or review a specific pull request: it always renders the interactive review card. For quiet inspection, reloads, and verification after a mutation, call get_pull_request_summary instead; it returns JSON only and never opens a card. Do not ask for confirmation before showing a requested card. Use list_pull_requests only when the pull request ID is unknown. When reviewing or preparing a pull request with no linked work items, briefly offer to find and link relevant items when that would help trace the change; do not make this a prerequisite for creating, submitting, or reviewing the pull request. To draft a new pull request, call create_pull_request and present its editable card. Before calling submit_pull_request, ask whether the user wants to change the draft text and wait for explicit confirmation to submit. Use update_pull_request only after the user confirms the exact title, description, or target-branch changes; it updates remote state without opening a new card.',
 		},
 	);
 
@@ -940,24 +940,35 @@ async function main(): Promise<void> {
 	server.registerTool(
 		'get_pull_request',
 		{
-			description: 'Show an Azure DevOps pull request by ID as an interactive review card with approvals, checkout, and file actions. Call this immediately whenever the user asks to show, open, view, or review a specific pull request; do not ask for confirmation or merely describe the card.',
+			description: 'Show an Azure DevOps pull request by ID as an interactive review card with approvals, checkout, and file actions. Call only when the user asks to show, open, view, or review the pull request; this always opens a card.',
 			inputSchema: z.object({
 				...repositorySchema,
 				pullRequestId: z.number().int().positive(),
-				includeChanges: z.boolean().default(true).describe('Include changed files and render the interactive review card. Set to false for a lightweight JSON-only response.'),
 			}),
 			_meta: {
 				ui: { resourceUri: pullRequestReviewCardUri },
 				'ui/resourceUri': pullRequestReviewCardUri,
 			},
 		},
-		async ({ organization, project, repository, pullRequestId, includeChanges }) => {
+		async ({ organization, project, repository, pullRequestId }) => {
 			const gitApi = await getGitApi(organization);
 			const pullRequest = await gitApi.getPullRequest(repository, pullRequestId, project);
-			if (!includeChanges) {
-				return { content: [{ type: 'text', text: pullRequestResult(pullRequest) }] };
-			}
 			return pullRequestReviewResult(pullRequest, organization, project, repository);
+		},
+	);
+
+	server.registerTool(
+		'get_pull_request_summary',
+		{
+			description: 'Read an Azure DevOps pull request without opening an interactive card. Use for quiet inspection, reloads, and verification after a mutation; use get_pull_request only when a card was explicitly requested.',
+			inputSchema: z.object({
+				...repositorySchema,
+				pullRequestId: z.number().int().positive(),
+			}),
+		},
+		async ({ organization, project, repository, pullRequestId }) => {
+			const pullRequest = await (await getGitApi(organization)).getPullRequest(repository, pullRequestId, project);
+			return { content: [{ type: 'text', text: pullRequestResult(pullRequest) }] };
 		},
 	);
 
@@ -1109,6 +1120,31 @@ async function main(): Promise<void> {
 				{ submitted: true },
 			);
 			return pullRequestReviewResult(pullRequest, organization, project, repository);
+		},
+	);
+
+	server.registerTool(
+		'update_pull_request',
+		{
+			description: 'Update the title, description, or target branch of an active Azure DevOps pull request. First show the pull request and confirm the exact requested changes with the user. This changes remote state. Azure DevOps may reject target-branch updates when pull request retargeting is not enabled for the repository.',
+			inputSchema: z.object({
+				...repositorySchema,
+				pullRequestId: z.number().int().positive().describe('Azure DevOps pull request ID.'),
+				title: z.string().min(1).max(255).optional().describe('Replacement pull request title.'),
+				description: z.string().max(4000).optional().describe('Replacement pull request description. An empty string clears it.'),
+				targetRef: z.string().startsWith('refs/heads/').optional().describe('Replacement target branch ref. Use only when retargeting is intended.'),
+				confirm: z.literal(true).describe('Set only after the user explicitly confirms the exact requested changes.'),
+			}).refine(({ title, description, targetRef }) => title !== undefined || description !== undefined || targetRef !== undefined, {
+				message: 'Provide at least one of title, description, or targetRef.',
+			}),
+		},
+		async ({ organization, project, repository, pullRequestId, title, description, targetRef }) => {
+			const pullRequest = await (await getGitApi(organization)).updatePullRequest({
+				...(title === undefined ? {} : { title }),
+				...(description === undefined ? {} : { description }),
+				...(targetRef === undefined ? {} : { targetRefName: targetRef }),
+			}, repository, pullRequestId, project);
+			return { content: [{ type: 'text', text: pullRequestResult(pullRequest) }] };
 		},
 	);
 
