@@ -57,6 +57,8 @@ The extension runs a local [Model Context Protocol](https://modelcontextprotocol
 
 Use `get_pull_request` only when the user asks to display a pull request: it always opens an interactive review card. Use `get_pull_request_summary` for quiet inspection, reloads, and verification after a mutation; it returns JSON without opening a card. `update_pull_request` also returns JSON only, so existing cards refresh through their normal polling cycle rather than opening a duplicate card.
 
+When Azure DevOps authentication is unavailable during background activity, VS Code adds a non-modal sign-in indication to the Accounts menu and shows one actionable sign-in notification every fifteen minutes at most. Agents must ask the user to run **Azure DevOps PRs (MCP): Sign In to Azure DevOps** once rather than invoking it or retrying it automatically.
+
 | Tool | Purpose |
 | --- | --- |
 | `get_workspace_repositories` | Discover Azure DevOps repositories in the current workspace. |

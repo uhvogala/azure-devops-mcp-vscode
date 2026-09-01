@@ -4,6 +4,11 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.81]
+
+- Cache healthy Azure DevOps tokens between review polls and show a rate-limited sign-in notification when authentication is unavailable.
+- Keep interactive sign-in limited to a user-selected action.
+
 ## [0.0.80]
 
 - Split card rendering from quiet pull request reads to prevent empty or unintended MCP App views.
