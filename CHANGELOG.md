@@ -4,6 +4,11 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.82]
+
+- Include linked Azure DevOps work-item descriptions in MCP pull request results.
+- Return work-item descriptions, acceptance criteria, and repro steps from `query_work_items`.
+
 ## [0.0.81]
 
 - Cache healthy Azure DevOps tokens between review polls and show a rate-limited sign-in notification when authentication is unavailable.

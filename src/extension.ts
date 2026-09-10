@@ -625,7 +625,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		}
 		const workItems = await (await getWorkItemTrackingApi(organization)).getWorkItems(
 			workItemIds,
-			['System.Id', 'System.Title', 'System.WorkItemType', 'System.State', 'System.TeamProject'],
+			['System.Id', 'System.Title', 'System.Description', 'System.WorkItemType', 'System.State', 'System.TeamProject'],
 		);
 		const workItemsById = new Map(workItems.map(workItem => [workItem.id, workItem]));
 		return workItemIds.flatMap(id => {
@@ -633,6 +633,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			return workItem ? [{
 				id,
 				title: workItem.fields?.['System.Title'],
+				description: workItem.fields?.['System.Description'],
 				type: workItem.fields?.['System.WorkItemType'],
 				state: workItem.fields?.['System.State'],
 				url: `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(String(workItem.fields?.['System.TeamProject'] ?? project))}/_workitems/edit/${id}`,

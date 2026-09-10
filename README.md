@@ -74,7 +74,7 @@ When Azure DevOps authentication is unavailable during background activity, VS C
 | `checkout_pull_request_branch` | Check out a pull request source or target branch locally. |
 | `set_pull_request_file_reviewed` | Mark a changed file as reviewed or not reviewed. |
 | `list_pull_request_work_items` | List work items already linked to a pull request. |
-| `query_work_items` | Query project work items with agent-defined WIQL filters and ordering. |
+| `query_work_items` | Query project work items with agent-defined WIQL filters and ordering, returning credentialed descriptions, acceptance criteria, and repro steps when available. |
 | `link_pull_request_work_items` | Link selected work items to an existing pull request after explicit confirmation. |
 | `create_pull_request` | Prepare an editable local pull request draft without creating a remote PR. |
 | `submit_pull_request` | Create a remote pull request after explicit confirmation, optionally linking work items. |

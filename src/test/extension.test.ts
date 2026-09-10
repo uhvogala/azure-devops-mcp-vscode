@@ -212,7 +212,7 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			sourceCommit: 'source-commit',
 			targetCommit: 'target-commit',
 			reviewers: [{ id: 'reviewer-1', displayName: 'Reviewer', vote: 0 }],
-			workItems: [{ id: 123, title: 'Original work item', type: 'Task', state: 'Active' }],
+			workItems: [{ id: 123, title: 'Original work item', description: '<p>Original description</p>', type: 'Task', state: 'Active' }],
 			changes: [{ path: '/src/example.ts', changeType: 2, commentCount: 0 }],
 		};
 
@@ -223,6 +223,7 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 		assert.strictEqual(reviewChanged(review, { ...review, targetRef: 'refs/heads/release' }), true);
 		assert.strictEqual(reviewChanged(review, { ...review, reviewers: [{ id: 'reviewer-1', displayName: 'Reviewer', vote: 10 }] }), true);
 		assert.strictEqual(reviewChanged(review, { ...review, workItems: [{ id: 123, title: 'Original work item', type: 'Task', state: 'Resolved' }] }), true);
+		assert.strictEqual(reviewChanged(review, { ...review, workItems: [{ id: 123, title: 'Original work item', description: '<p>Updated description</p>', type: 'Task', state: 'Active' }] }), true);
 		assert.strictEqual(reviewChanged(review, { ...review, changes: [{ path: '/src/example.ts', changeType: 2, commentCount: 1 }] }), true);
 	});
 

@@ -471,7 +471,7 @@ async function main(): Promise<void> {
 		}
 		const workItems = await (await getWorkItemTrackingApi(organization)).getWorkItems(
 			workItemIds,
-			['System.Id', 'System.Title', 'System.WorkItemType', 'System.State', 'System.TeamProject'],
+			['System.Id', 'System.Title', 'System.Description', 'System.WorkItemType', 'System.State', 'System.TeamProject'],
 			undefined,
 			undefined,
 			undefined,
@@ -485,6 +485,7 @@ async function main(): Promise<void> {
 			return [{
 				id,
 				title: workItem.fields?.['System.Title'],
+				description: workItem.fields?.['System.Description'],
 				type: workItem.fields?.['System.WorkItemType'],
 				state: workItem.fields?.['System.State'],
 				url: `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(String(workItem.fields?.['System.TeamProject'] ?? project))}/_workitems/edit/${id}`,
@@ -541,7 +542,18 @@ async function main(): Promise<void> {
 		}
 		const workItems = await workItemTrackingApi.getWorkItems(
 			workItemIds,
-			['System.Id', 'System.Title', 'System.WorkItemType', 'System.State', 'System.Tags', 'System.ChangedDate', 'System.TeamProject'],
+			[
+				'System.Id',
+				'System.Title',
+				'System.Description',
+				'Microsoft.VSTS.Common.AcceptanceCriteria',
+				'Microsoft.VSTS.TCM.ReproSteps',
+				'System.WorkItemType',
+				'System.State',
+				'System.Tags',
+				'System.ChangedDate',
+				'System.TeamProject',
+			],
 			undefined,
 			undefined,
 			undefined,
@@ -556,6 +568,9 @@ async function main(): Promise<void> {
 			return [{
 				id,
 				title: workItem.fields?.['System.Title'],
+				description: workItem.fields?.['System.Description'],
+				acceptanceCriteria: workItem.fields?.['Microsoft.VSTS.Common.AcceptanceCriteria'],
+				reproSteps: workItem.fields?.['Microsoft.VSTS.TCM.ReproSteps'],
 				type: workItem.fields?.['System.WorkItemType'],
 				state: workItem.fields?.['System.State'],
 				tags: workItem.fields?.['System.Tags'],
@@ -889,7 +904,7 @@ async function main(): Promise<void> {
 	server.registerTool(
 		'list_pull_request_work_items',
 		{
-			description: 'List work items already related to an Azure DevOps pull request. Use after get_pull_request to inspect existing links and after linking to verify the result. Linked items may belong to another project in the same Azure DevOps organization. This tool only reads existing links; use query_work_items to discover candidates and link_pull_request_work_items to change links.',
+			description: 'List work items already related to an Azure DevOps pull request, including their Azure DevOps description content. Use after get_pull_request to inspect existing links and after linking to verify the result. Linked items may belong to another project in the same Azure DevOps organization. This tool only reads existing links; use query_work_items to discover candidates and link_pull_request_work_items to change links.',
 			inputSchema: z.object({
 				...repositorySchema,
 				pullRequestId: z.number().int().positive().describe('Azure DevOps pull request ID whose existing work-item links will be read.'),
@@ -904,7 +919,7 @@ async function main(): Promise<void> {
 	server.registerTool(
 		'query_work_items',
 		{
-			description: "Find candidate Azure DevOps work items with a read-only WIQL query. Before calling, inspect the pull request or user request and compose filters and ordering that fit that specific context; do not rely on a fixed relevance rule. The work-item project may differ from the pull request repository's project when both belong to this Azure DevOps organization. Use a flat SELECT [System.Id] FROM WorkItems query, for example: SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS WORDS 'authentication' AND [System.State] <> 'Closed' ORDER BY [System.ChangedDate] DESC. The project is supplied separately, so @project is available in the query. Present returned candidates to the user before linking any item.",
+			description: "Find Azure DevOps work items with a read-only WIQL query and retrieve their credentialed description, acceptance criteria, and repro steps when present. Before calling, inspect the pull request or user request and compose filters and ordering that fit that specific context; do not rely on a fixed relevance rule. The work-item project may differ from the pull request repository's project when both belong to this Azure DevOps organization. Use a flat SELECT [System.Id] FROM WorkItems query, for example: SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS WORDS 'authentication' AND [System.State] <> 'Closed' ORDER BY [System.ChangedDate] DESC. The project is supplied separately, so @project is available in the query. Present returned candidates to the user before linking any item.",
 			inputSchema: z.object({
 				organization: z.string().min(1).describe('Azure DevOps organization name.'),
 				project: z.string().min(1).describe('Azure DevOps project name or ID.'),
