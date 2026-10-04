@@ -97,6 +97,7 @@ function renderReview(nextReview) {
 				project: review.project,
 				repository: review.repository,
 				pullRequestId: review.id,
+				background: true,
 			},
 		})).structuredContent;
 	const refreshReview = async () => {
