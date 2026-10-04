@@ -55,7 +55,7 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			},
 			async () => workspaceContext,
 			sharedState,
-			async () => 'current-access-token',
+			async (interactive: boolean) => interactive ? 'interactive-access-token' : 'silent-access-token',
 		);
 
 		try {
@@ -117,7 +117,15 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 				body: '{}',
 			});
 			assert.strictEqual(tokenResponse.status, 200);
-			assert.deepStrictEqual(await tokenResponse.json(), { accessToken: 'current-access-token' });
+			assert.deepStrictEqual(await tokenResponse.json(), { accessToken: 'silent-access-token' });
+
+			const interactiveTokenResponse = await fetch(environment.AZURE_DEVOPS_ACCESS_TOKEN_URL, {
+				method: 'POST',
+				headers,
+				body: JSON.stringify({ interactive: true }),
+			});
+			assert.strictEqual(interactiveTokenResponse.status, 200);
+			assert.deepStrictEqual(await interactiveTokenResponse.json(), { accessToken: 'interactive-access-token' });
 
 			const stateResponse = await fetch(environment.AZURE_DEVOPS_SHARED_STATE_URL, {
 				method: 'POST',

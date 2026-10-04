@@ -113,6 +113,7 @@ function renderReview(review) {
 				project: review.project,
 				repository: review.repository,
 				pullRequestId: review.id,
+				background: true,
 				includeChanges: true,
 			},
 		})).structuredContent;

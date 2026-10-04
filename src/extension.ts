@@ -12,6 +12,7 @@ import {
 import { createServer, IncomingMessage, Server, ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { AzureDevOpsAuthentication } from './authentication';
+import { isBackgroundRefresh, isInteractiveAccessTokenRequest } from './authentication-mode';
 import { loadPullRequestReview } from './pull-request-review';
 
 const providerId = 'azure-devops-mcp.pull-requests';
@@ -484,7 +485,7 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 		private readonly checkoutBranch: (arguments_: CheckoutPullRequestBranchArguments) => Promise<string>,
 		private readonly getWorkspaceRepositoryContext: () => Promise<WorkspaceRepositoryContext>,
 		private readonly sharedState: SharedWorkspaceStateStore,
-		private readonly getAccessToken: () => Promise<string>,
+		private readonly getAccessToken: (interactive: boolean) => Promise<string>,
 	) {
 	}
 
@@ -558,8 +559,9 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 				return;
 			}
 			if (request.url === '/access-token') {
+				const interactive = isInteractiveAccessTokenRequest(arguments_);
 				response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
-					.end(JSON.stringify({ accessToken: await this.getAccessToken() }));
+					.end(JSON.stringify({ accessToken: await this.getAccessToken(interactive) }));
 				return;
 			}
 			if (request.url === '/shared-state' && isSharedStateRequest(arguments_)) {
@@ -589,41 +591,34 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 
 export function activate(context: vscode.ExtensionContext): void {
 	const authentication = new AzureDevOpsAuthentication();
-	const getGitApi = async (organization: string) => {
-		const environment = await authentication.getServerEnvironment();
-		const connection = new azureDevOps.WebApi(
+	const azureConnection = async (organization: string, interactive: boolean) => {
+		const accessToken = await authentication.getAccessToken(interactive);
+		return new azureDevOps.WebApi(
 			`https://dev.azure.com/${encodeURIComponent(organization)}`,
-			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
+			azureDevOps.getBearerHandler(accessToken),
 		);
-		return connection.getGitApi();
 	};
-	const getWorkItemTrackingApi = async (organization: string) => {
-		const environment = await authentication.getServerEnvironment();
-		const connection = new azureDevOps.WebApi(
-			`https://dev.azure.com/${encodeURIComponent(organization)}`,
-			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
-		);
-		return connection.getWorkItemTrackingApi();
+	const getGitApi = async (organization: string, interactive = true) => {
+		return (await azureConnection(organization, interactive)).getGitApi();
 	};
-	const getAuthenticatedUserId = async (organization: string): Promise<string> => {
-		const environment = await authentication.getServerEnvironment();
-		const connection = new azureDevOps.WebApi(
-			`https://dev.azure.com/${encodeURIComponent(organization)}`,
-			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
-		);
+	const getWorkItemTrackingApi = async (organization: string, interactive = true) => {
+		return (await azureConnection(organization, interactive)).getWorkItemTrackingApi();
+	};
+	const getAuthenticatedUserId = async (organization: string, interactive = true): Promise<string> => {
+		const connection = await azureConnection(organization, interactive);
 		const userId = (await connection.connect()).authenticatedUser?.id;
 		if (!userId) {
 			throw new Error('Azure DevOps did not return the signed-in user identity.');
 		}
 		return userId;
 	};
-	const listPullRequestWorkItems = async ({ organization, project, repository, pullRequestId }: Pick<PullRequestReviewStateArguments, 'organization' | 'project' | 'repository' | 'pullRequestId'>) => {
-		const references = await (await getGitApi(organization)).getPullRequestWorkItemRefs(repository, pullRequestId, project);
+	const listPullRequestWorkItems = async ({ organization, project, repository, pullRequestId }: Pick<PullRequestReviewStateArguments, 'organization' | 'project' | 'repository' | 'pullRequestId'>, interactive = true) => {
+		const references = await (await getGitApi(organization, interactive)).getPullRequestWorkItemRefs(repository, pullRequestId, project);
 		const workItemIds = references.map(reference => Number(reference.id)).filter(Number.isSafeInteger);
 		if (workItemIds.length === 0) {
 			return [];
 		}
-		const workItems = await (await getWorkItemTrackingApi(organization)).getWorkItems(
+		const workItems = await (await getWorkItemTrackingApi(organization, interactive)).getWorkItems(
 			workItemIds,
 			['System.Id', 'System.Title', 'System.Description', 'System.WorkItemType', 'System.State', 'System.TeamProject'],
 		);
@@ -643,14 +638,15 @@ export function activate(context: vscode.ExtensionContext): void {
 	const loadReviewWithWorkItems = async (
 		pullRequest: GitPullRequest,
 		identity: Pick<PullRequestReviewStateArguments, 'organization' | 'project' | 'repository' | 'pullRequestId'>,
+		interactive = true,
 	) => {
 		const [review, workItems] = await Promise.all([
 			loadPullRequestReview(pullRequest, identity, {
-				getGitApi,
-				getCurrentUserId: getAuthenticatedUserId,
+				getGitApi: organization => getGitApi(organization, interactive),
+				getCurrentUserId: organization => getAuthenticatedUserId(organization, interactive),
 				getReviewedPaths: reviewState => Promise.resolve(reviewStateStore.getReviewedPaths(reviewState)),
 			}),
-			listPullRequestWorkItems(identity).catch(() => []),
+			listPullRequestWorkItems(identity, interactive).catch(() => []),
 		]);
 		return { ...review, workItems };
 	};
@@ -974,7 +970,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			selectedOverviewPullRequestId = context.workspaceState.get<number>(selectedPullRequestKey);
 		}
 		try {
-			const gitApi = await getGitApi(selectedRepository.organization);
+			const gitApi = await getGitApi(selectedRepository.organization, false);
 			const pullRequests = await gitApi.getPullRequests(
 				selectedRepository.repository,
 				{ status: PullRequestStatus.Active },
@@ -1005,7 +1001,7 @@ export function activate(context: vscode.ExtensionContext): void {
 				selectedOverviewPullRequestId = selectedPullRequest.id;
 				await context.workspaceState.update(selectedPullRequestKey, selectedPullRequest.id);
 				const pullRequest = await gitApi.getPullRequest(selectedRepository.repository, selectedPullRequest.id, selectedRepository.project);
-				const loadedReview = await loadReviewWithWorkItems(pullRequest, { ...selectedRepository, pullRequestId: selectedPullRequest.id });
+				const loadedReview = await loadReviewWithWorkItems(pullRequest, { ...selectedRepository, pullRequestId: selectedPullRequest.id }, false);
 				const reviewState = reviewStateStore.getState({ ...selectedRepository, pullRequestId: selectedPullRequest.id });
 				const repositoryState = sharedState.get(repositoryRefreshStateKey(selectedRepository), {});
 				const currentBranch = (await gitRepositoryForRepository(selectedRepository.repository))?.state.HEAD?.name;
@@ -1123,9 +1119,10 @@ export function activate(context: vscode.ExtensionContext): void {
 								break;
 							case 'get_pull_request': {
 								if (!isPullRequestReviewStateArguments(arguments_)) {throw new Error('Invalid pull request refresh request.');}
-								const gitApi = await getGitApi(arguments_.organization);
+								const interactive = !isBackgroundRefresh(arguments_);
+								const gitApi = await getGitApi(arguments_.organization, interactive);
 								const pullRequest = await gitApi.getPullRequest(arguments_.repository, arguments_.pullRequestId, arguments_.project);
-								const loadedReview = await loadReviewWithWorkItems(pullRequest, arguments_);
+								const loadedReview = await loadReviewWithWorkItems(pullRequest, arguments_, interactive);
 								const reviewState = reviewStateStore.getState(arguments_);
 								const currentBranch = (await gitRepositoryForRepository(arguments_.repository))?.state.HEAD?.name;
 								result.structuredContent = {
@@ -1230,7 +1227,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		checkoutPullRequestBranch,
 		workspaceRepositoryContext,
 		sharedState,
-		() => authentication.getAccessToken(),
+		interactive => authentication.getAccessToken(interactive),
 	);
 	context.subscriptions.push(sharedState.onDidChange(change => {
 		void reviewWebview?.webview.postMessage({ type: 'sharedStateChanged', change });
@@ -1249,10 +1246,9 @@ export function activate(context: vscode.ExtensionContext): void {
 				throw new Error('Invalid Azure DevOps pull request file URI.');
 			}
 
-			const environment = await authentication.getServerEnvironment();
 			const connection = new azureDevOps.WebApi(
 				`https://dev.azure.com/${encodeURIComponent(organization)}`,
-				azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
+				azureDevOps.getBearerHandler(await authentication.getAccessToken(true)),
 			);
 			const gitApi = await connection.getGitApi();
 			const content = await gitApi.getItemContent(

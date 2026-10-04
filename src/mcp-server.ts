@@ -13,6 +13,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as VSSInterfaces from 'azure-devops-node-api/interfaces/common/VSSInterfaces';
 import * as z from 'zod/v4';
+import { authenticationFailure } from './authentication-mode';
 import { loadPullRequestReview, reviewerSummary } from './pull-request-review';
 
 const repositorySchema = {
@@ -104,24 +105,24 @@ function requiredEnvironment(name: string): string {
 	return value;
 }
 
-function createTokenProvider(): () => Promise<string> {
+function createTokenProvider(): (interactive: boolean) => Promise<string> {
 	const accessTokenUrl = process.env.AZURE_DEVOPS_ACCESS_TOKEN_URL;
 	if (!accessTokenUrl) {
 		const accessToken = requiredEnvironment('AZURE_DEVOPS_ACCESS_TOKEN');
 		return async () => accessToken;
 	}
 	const commandToken = requiredEnvironment('AZURE_DEVOPS_DIFF_COMMAND_TOKEN');
-	return async () => {
+	return async interactive => {
 		const response = await fetch(accessTokenUrl, {
 			method: 'POST',
 			headers: {
 				Authorization: `Bearer ${commandToken}`,
 				'Content-Type': 'application/json',
 			},
-			body: '{}',
+			body: JSON.stringify({ interactive }),
 		});
 		if (!response.ok) {
-			throw new Error(`Unable to obtain an Azure DevOps access token (${response.status}).`);
+			throw authenticationFailure(await response.text());
 		}
 		const payload: unknown = await response.json();
 		if (!payload || typeof payload !== 'object' || typeof (payload as { accessToken?: unknown }).accessToken !== 'string') {
@@ -395,7 +396,7 @@ async function main(): Promise<void> {
 		{ name: 'azure-devops-pull-requests', version: __AZURE_DEVOPS_MCP_VERSION__ },
 		{
 			instructions:
-				'This server manages Azure DevOps pull requests. VS Code reuses its existing Microsoft session: never invoke the Sign In command autonomously or retry it after a background refresh fails. When an operation reports missing or expired authentication, ask the user to run Sign In once; background activity shows one rate-limited sign-in notification and an Accounts indication. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Call get_pull_request only when the user asks to show, open, view, or review a specific pull request: it always renders the interactive review card. For quiet inspection, reloads, and verification after a mutation, call get_pull_request_summary instead; it returns JSON only and never opens a card. Do not ask for confirmation before showing a requested card. Use list_pull_requests only when the pull request ID is unknown. When reviewing or preparing a pull request with no linked work items, briefly offer to find and link relevant items when that would help trace the change; do not make this a prerequisite for creating, submitting, or reviewing the pull request. To draft a new pull request, call create_pull_request and present its editable card. Before calling submit_pull_request, ask whether the user wants to change the draft text and wait for explicit confirmation to submit. Use update_pull_request only after the user confirms the exact title, description, or target-branch changes; it updates remote state without opening a new card.',
+				'This server manages Azure DevOps pull requests. VS Code reuses its existing Microsoft session: never invoke the Sign In command autonomously or retry it after a background refresh fails. When an operation reports missing or expired authentication, ask the user to run Sign In once. Background refresh stays silent. A tool call that needs a token prompts for sign-in; do not set background on get_pull_request. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Call get_pull_request only when the user asks to show, open, view, or review a specific pull request: it always renders the interactive review card. For quiet inspection, reloads, and verification after a mutation, call get_pull_request_summary instead; it returns JSON only and never opens a card. Do not ask for confirmation before showing a requested card. Use list_pull_requests only when the pull request ID is unknown. When reviewing or preparing a pull request with no linked work items, briefly offer to find and link relevant items when that would help trace the change; do not make this a prerequisite for creating, submitting, or reviewing the pull request. To draft a new pull request, call create_pull_request and present its editable card. Before calling submit_pull_request, ask whether the user wants to change the draft text and wait for explicit confirmation to submit. Use update_pull_request only after the user confirms the exact title, description, or target-branch changes; it updates remote state without opening a new card.',
 		},
 	);
 
@@ -428,8 +429,8 @@ async function main(): Promise<void> {
 		},
 	);
 
-	const getGitApi = async (organization: string) => {
-		const accessToken = await getAccessToken();
+	const getGitApi = async (organization: string, interactive = true) => {
+		const accessToken = await getAccessToken(interactive);
 		const connection = new azureDevOps.WebApi(
 			`https://dev.azure.com/${encodeURIComponent(organization)}`,
 			azureDevOps.getBearerHandler(accessToken),
@@ -437,8 +438,8 @@ async function main(): Promise<void> {
 		return connection.getGitApi();
 	};
 
-	const getWorkItemTrackingApi = async (organization: string) => {
-		const accessToken = await getAccessToken();
+	const getWorkItemTrackingApi = async (organization: string, interactive = true) => {
+		const accessToken = await getAccessToken(interactive);
 		const connection = new azureDevOps.WebApi(
 			`https://dev.azure.com/${encodeURIComponent(organization)}`,
 			azureDevOps.getBearerHandler(accessToken),
@@ -446,8 +447,8 @@ async function main(): Promise<void> {
 		return connection.getWorkItemTrackingApi();
 	};
 
-	const getAuthenticatedUserId = async (organization: string): Promise<string> => {
-		const accessToken = await getAccessToken();
+	const getAuthenticatedUserId = async (organization: string, interactive = true): Promise<string> => {
+		const accessToken = await getAccessToken(interactive);
 		const connection = new azureDevOps.WebApi(
 			`https://dev.azure.com/${encodeURIComponent(organization)}`,
 			azureDevOps.getBearerHandler(accessToken),
@@ -460,8 +461,8 @@ async function main(): Promise<void> {
 		return userId;
 	};
 
-	const listPullRequestWorkItems = async (organization: string, project: string, repository: string, pullRequestId: number) => {
-		const gitApi = await getGitApi(organization);
+	const listPullRequestWorkItems = async (organization: string, project: string, repository: string, pullRequestId: number, interactive = true) => {
+		const gitApi = await getGitApi(organization, interactive);
 		const references = await gitApi.getPullRequestWorkItemRefs(repository, pullRequestId, project);
 		const workItemIds = references
 			.map(reference => Number(reference.id))
@@ -469,7 +470,7 @@ async function main(): Promise<void> {
 		if (workItemIds.length === 0) {
 			return [];
 		}
-		const workItems = await (await getWorkItemTrackingApi(organization)).getWorkItems(
+		const workItems = await (await getWorkItemTrackingApi(organization, interactive)).getWorkItems(
 			workItemIds,
 			['System.Id', 'System.Title', 'System.Description', 'System.WorkItemType', 'System.State', 'System.TeamProject'],
 			undefined,
@@ -585,14 +586,15 @@ async function main(): Promise<void> {
 		organization: string,
 		project: string,
 		repository: string,
+		interactive = true,
 	) => {
 		const [loadedReview, workItems] = await Promise.all([
 			loadPullRequestReview(pullRequest, { organization, project, repository }, {
-				getGitApi,
-				getCurrentUserId: getAuthenticatedUserId,
+				getGitApi: reviewOrganization => getGitApi(reviewOrganization, interactive),
+				getCurrentUserId: reviewOrganization => getAuthenticatedUserId(reviewOrganization, interactive),
 				getReviewedPaths: getPullRequestReviewState,
 			}),
-			listPullRequestWorkItems(organization, project, repository, pullRequest.pullRequestId!).catch(() => []),
+			listPullRequestWorkItems(organization, project, repository, pullRequest.pullRequestId!, interactive).catch(() => []),
 		]);
 		const sharedStateKey = pullRequestReviewStateKey({ organization, project, repository, pullRequestId: pullRequest.pullRequestId! });
 		const sharedState = await getSharedState(sharedStateKey, []);
@@ -959,16 +961,18 @@ async function main(): Promise<void> {
 			inputSchema: z.object({
 				...repositorySchema,
 				pullRequestId: z.number().int().positive(),
+				background: z.boolean().optional().describe('Set only by the review card or Pull Requests overview background refresh. Omit it for user and agent calls so a missing session can prompt for sign-in.'),
 			}),
 			_meta: {
 				ui: { resourceUri: pullRequestReviewCardUri },
 				'ui/resourceUri': pullRequestReviewCardUri,
 			},
 		},
-		async ({ organization, project, repository, pullRequestId }) => {
-			const gitApi = await getGitApi(organization);
+		async ({ organization, project, repository, pullRequestId, background }) => {
+			const interactive = background !== true;
+			const gitApi = await getGitApi(organization, interactive);
 			const pullRequest = await gitApi.getPullRequest(repository, pullRequestId, project);
-			return pullRequestReviewResult(pullRequest, organization, project, repository);
+			return pullRequestReviewResult(pullRequest, organization, project, repository, interactive);
 		},
 	);
 
