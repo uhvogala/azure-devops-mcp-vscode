@@ -4,6 +4,12 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.83]
+
+- Start Microsoft sign-in when an explicit MCP tool cannot recover its session silently, and share the attempt across concurrent calls.
+- Resume pending token lookups after successful sign-in, respect token expiry, and report cancellation or bounded authentication and network timeouts instead of leaving commands stuck.
+- Keep background authentication silent and retain rate-limited sign-in notifications.
+
 ## [0.0.82]
 
 - Include linked Azure DevOps work-item descriptions in MCP pull request results.

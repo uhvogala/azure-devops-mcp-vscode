@@ -36,7 +36,7 @@ Review, draft, and check out Azure DevOps pull requests directly in GitHub Copil
 
 3. Open GitHub Copilot Chat or another MCP-compatible agent host. VS Code discovers the local `Azure DevOps pull requests` MCP server automatically.
 
-4. The extension reuses your existing Microsoft session. Only if prompted, run **Azure DevOps PRs (MCP): Sign In to Azure DevOps** from the Command Palette and complete the Microsoft sign-in flow.
+4. The extension reuses your existing Microsoft session. If a requested MCP tool needs a new session, complete the Microsoft sign-in flow that VS Code opens; the waiting command resumes automatically. You can also run **Azure DevOps PRs (MCP): Sign In to Azure DevOps** from the Command Palette.
 
 ## Example Prompts
 
@@ -57,7 +57,9 @@ The extension runs a local [Model Context Protocol](https://modelcontextprotocol
 
 Use `get_pull_request` only when the user asks to display a pull request: it always opens an interactive review card. Use `get_pull_request_summary` for quiet inspection, reloads, and verification after a mutation; it returns JSON without opening a card. `update_pull_request` also returns JSON only, so existing cards refresh through their normal polling cycle rather than opening a duplicate card.
 
-When Azure DevOps authentication is unavailable during background activity, VS Code adds a non-modal sign-in indication to the Accounts menu and shows one actionable sign-in notification every fifteen minutes at most. Agents must ask the user to run **Azure DevOps PRs (MCP): Sign In to Azure DevOps** once rather than invoking it or retrying it automatically.
+Explicit MCP tool calls can start Microsoft sign-in when silent session recovery fails. Concurrent calls share one sign-in attempt, and commands still waiting for authentication resume after sign-in succeeds, including sign-in started from the notification. Cancelled or timed-out sign-in returns an error instead of leaving commands pending. Failed operations are not automatically replayed.
+
+Background refreshes never open interactive sign-in. When authentication is unavailable, the extension shows one actionable sign-in notification every fifteen minutes at most. Agents must not invoke the Sign In command or repeatedly retry authentication failures. Silent session lookups time out after ten seconds, interactive sign-in after forty-five seconds, and MCP token-bridge requests after sixty seconds.
 
 | Tool | Purpose |
 | --- | --- |
@@ -89,7 +91,7 @@ When Azure DevOps authentication is unavailable during background activity, VS C
 - **Local communication:** MCP communication stays on your machine and uses standard input/output.
 - **Existing VS Code authentication:** The extension requests Azure DevOps access through VS Code's Microsoft authentication provider rather than storing credentials itself.
 - **Official SDKs:** Built with the official MCP TypeScript SDK and `azure-devops-node-api`.
-- **Session management:** Manage or sign out of the Microsoft account through VS Code's Accounts menu. Start a new agent conversation after an expired session is refreshed.
+- **Session management:** Manage or sign out of the Microsoft account through VS Code's Accounts menu. Session recovery does not require restarting the MCP server or starting a new agent conversation.
 
 ## Requirements
 

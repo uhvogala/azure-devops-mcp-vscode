@@ -10,9 +10,122 @@ import {
 } from '../extension';
 import { loadPullRequestReview } from '../pull-request-review';
 import { PullRequestRefreshSnapshot, reviewChanged } from '../pull-request-refresh';
+import { AzureDevOpsAuthentication } from '../authentication';
+import { createTokenProvider } from '../mcp-server';
 
 
 suite('Azure DevOps PRs (MCP) extension', () => {
+	test('unblocks a pending token lookup when sign-in succeeds', async () => {
+		let completeSilentLookup: ((session: vscode.AuthenticationSession) => void) | undefined;
+		const authentication = new AzureDevOpsAuthentication(async createIfNone => createIfNone
+			? { id: 'session', accessToken: 'signed-in-token', account: { id: 'account', label: 'Test account' }, scopes: [] }
+			: new Promise(resolve => { completeSilentLookup = resolve; }));
+		try {
+			const pendingToken = authentication.getAccessToken();
+			await authentication.signIn();
+			assert.strictEqual(await Promise.race([
+				pendingToken,
+				new Promise(resolve => setTimeout(() => resolve('timed out'), 100)),
+			]), 'signed-in-token');
+			completeSilentLookup?.({ id: 'old-session', accessToken: 'old-token', account: { id: 'account', label: 'Test account' }, scopes: [] });
+			assert.strictEqual(await authentication.getAccessToken(), 'signed-in-token');
+		} finally {
+			authentication.dispose();
+		}
+	});
+
+	test('shares one sign-in for concurrent interactive token requests', async () => {
+		let signInCount = 0;
+		const authentication = new AzureDevOpsAuthentication(async createIfNone => {
+			if (!createIfNone) {
+				return undefined;
+			}
+			signInCount++;
+			return { id: 'session', accessToken: 'signed-in-token', account: { id: 'account', label: 'Test account' }, scopes: [] };
+		});
+		try {
+			assert.deepStrictEqual(await Promise.all([
+				authentication.getAccessToken(true),
+				authentication.getAccessToken(true),
+			]), ['signed-in-token', 'signed-in-token']);
+			assert.strictEqual(signInCount, 1);
+		} finally {
+			authentication.dispose();
+		}
+	});
+
+	test('does not start interactive sign-in for background token requests', async () => {
+		const requests: boolean[] = [];
+		const authentication = new AzureDevOpsAuthentication(async createIfNone => {
+			requests.push(createIfNone);
+			return undefined;
+		});
+		try {
+			await assert.rejects(authentication.getAccessToken(), /authentication is unavailable/);
+			assert.deepStrictEqual(requests, [false]);
+		} finally {
+			authentication.dispose();
+		}
+	});
+
+	test('times out a silent lookup and allows the next token request to recover', async () => {
+		let requests = 0;
+		const authentication = new AzureDevOpsAuthentication(async () => ++requests === 1
+			? new Promise(() => {})
+			: { id: 'session', accessToken: 'recovered-token', account: { id: 'account', label: 'Test account' }, scopes: [] }, 10);
+		try {
+			await assert.rejects(authentication.getAccessToken(), /authentication timed out/);
+			assert.strictEqual(await authentication.getAccessToken(), 'recovered-token');
+		} finally {
+			authentication.dispose();
+		}
+	});
+
+	test('fails cancelled sign-in requests and allows a later attempt', async () => {
+		let signInCount = 0;
+		const authentication = new AzureDevOpsAuthentication(async createIfNone => {
+			if (!createIfNone) {
+				throw new Error('Silent refresh failed');
+			}
+			if (++signInCount === 1) {
+				throw new Error('Sign-in cancelled');
+			}
+			return { id: 'session', accessToken: 'recovered-token', account: { id: 'account', label: 'Test account' }, scopes: [] };
+		});
+		try {
+			const results = await Promise.allSettled([authentication.getAccessToken(true), authentication.getAccessToken(true)]);
+			assert.ok(results.every(result => result.status === 'rejected' && /Sign-in cancelled/.test(String(result.reason))));
+			assert.strictEqual(signInCount, 1);
+			assert.strictEqual(await authentication.getAccessToken(true), 'recovered-token');
+		} finally {
+			authentication.dispose();
+		}
+	});
+
+	test('times out interactive sign-in instead of leaving commands pending', async () => {
+		const authentication = new AzureDevOpsAuthentication(async createIfNone => createIfNone ? new Promise(() => {}) : undefined, 10, 10);
+		try {
+			await assert.rejects(authentication.getAccessToken(true), /authentication timed out/);
+		} finally {
+			authentication.dispose();
+		}
+	});
+
+	test('requests sign-in when the provider returns an expired access token', async () => {
+		const expiredToken = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 60 })).toString('base64url')}.signature`;
+		const authentication = new AzureDevOpsAuthentication(async createIfNone => ({
+			id: 'session',
+			accessToken: createIfNone ? 'fresh-token' : expiredToken,
+			account: { id: 'account', label: 'Test account' },
+			scopes: [],
+		}));
+		try {
+			assert.strictEqual(await authentication.getAccessToken(true), 'fresh-token');
+		} finally {
+			authentication.dispose();
+		}
+	});
+
 	test('activates and registers its commands', async () => {
 		const extension = vscode.extensions.getExtension('aitostack.azure-devops-prs-mcp');
 		assert.ok(extension, 'Azure DevOps PRs (MCP) extension should be available');
@@ -33,6 +146,7 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 	test('forwards checkout and reviewed-file actions with their full card parameters', async () => {
 		let diffArguments: object | undefined;
 		let checkoutArguments: CheckoutPullRequestBranchArguments | undefined;
+		let requestToken = async () => 'current-access-token';
 		const workspaceContext = {
 			repositories: [{ organization: 'example-org', project: 'example-project', repository: 'example-repository' }],
 			activeRepository: { organization: 'example-org', project: 'example-project', repository: 'example-repository' },
@@ -55,7 +169,10 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			},
 			async () => workspaceContext,
 			sharedState,
-			async () => 'current-access-token',
+			async interactive => {
+				assert.strictEqual(interactive, true);
+				return requestToken();
+			},
 		);
 
 		try {
@@ -118,6 +235,13 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			});
 			assert.strictEqual(tokenResponse.status, 200);
 			assert.deepStrictEqual(await tokenResponse.json(), { accessToken: 'current-access-token' });
+
+			const getAccessToken = createTokenProvider(environment);
+			assert.strictEqual(await getAccessToken(), 'current-access-token');
+			requestToken = async () => { throw new Error('Sign-in cancelled'); };
+			await assert.rejects(getAccessToken(), /Sign-in cancelled/);
+			requestToken = async () => new Promise(() => {});
+			await assert.rejects(createTokenProvider(environment, 20)(), /authentication timed out/);
 
 			const stateResponse = await fetch(environment.AZURE_DEVOPS_SHARED_STATE_URL, {
 				method: 'POST',

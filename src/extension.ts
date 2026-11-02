@@ -484,7 +484,7 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 		private readonly checkoutBranch: (arguments_: CheckoutPullRequestBranchArguments) => Promise<string>,
 		private readonly getWorkspaceRepositoryContext: () => Promise<WorkspaceRepositoryContext>,
 		private readonly sharedState: SharedWorkspaceStateStore,
-		private readonly getAccessToken: () => Promise<string>,
+		private readonly getAccessToken: (interactive: boolean) => Promise<string>,
 	) {
 	}
 
@@ -558,8 +558,9 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 				return;
 			}
 			if (request.url === '/access-token') {
+				const accessToken = await this.getAccessToken(true);
 				response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
-					.end(JSON.stringify({ accessToken: await this.getAccessToken() }));
+					.end(JSON.stringify({ accessToken }));
 				return;
 			}
 			if (request.url === '/shared-state' && isSharedStateRequest(arguments_)) {
@@ -594,6 +595,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		const connection = new azureDevOps.WebApi(
 			`https://dev.azure.com/${encodeURIComponent(organization)}`,
 			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
+			{ socketTimeout: 20_000 },
 		);
 		return connection.getGitApi();
 	};
@@ -602,6 +604,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		const connection = new azureDevOps.WebApi(
 			`https://dev.azure.com/${encodeURIComponent(organization)}`,
 			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
+			{ socketTimeout: 20_000 },
 		);
 		return connection.getWorkItemTrackingApi();
 	};
@@ -610,6 +613,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		const connection = new azureDevOps.WebApi(
 			`https://dev.azure.com/${encodeURIComponent(organization)}`,
 			azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
+			{ socketTimeout: 20_000 },
 		);
 		const userId = (await connection.connect()).authenticatedUser?.id;
 		if (!userId) {
@@ -1230,7 +1234,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		checkoutPullRequestBranch,
 		workspaceRepositoryContext,
 		sharedState,
-		() => authentication.getAccessToken(),
+		interactive => authentication.getAccessToken(interactive),
 	);
 	context.subscriptions.push(sharedState.onDidChange(change => {
 		void reviewWebview?.webview.postMessage({ type: 'sharedStateChanged', change });
@@ -1253,6 +1257,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			const connection = new azureDevOps.WebApi(
 				`https://dev.azure.com/${encodeURIComponent(organization)}`,
 				azureDevOps.getBearerHandler(environment.AZURE_DEVOPS_ACCESS_TOKEN),
+				{ socketTimeout: 20_000 },
 			);
 			const gitApi = await connection.getGitApi();
 			const content = await gitApi.getItemContent(

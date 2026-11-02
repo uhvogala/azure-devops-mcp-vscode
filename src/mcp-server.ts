@@ -96,38 +96,47 @@ interface PullRequestDraftRecord {
 
 const pullRequestDraftIndexKey = 'azure-devops-mcp.drafts';
 
-function requiredEnvironment(name: string): string {
-	const value = process.env[name];
+function requiredEnvironment(name: string, environment = process.env): string {
+	const value = environment[name];
 	if (!value) {
 		throw new Error(`Missing ${name}. Start this server from the Azure DevOps MCP VS Code extension.`);
 	}
 	return value;
 }
 
-function createTokenProvider(): () => Promise<string> {
-	const accessTokenUrl = process.env.AZURE_DEVOPS_ACCESS_TOKEN_URL;
+export function createTokenProvider(environment = process.env, requestTimeoutMs = 60_000): () => Promise<string> {
+	const accessTokenUrl = environment.AZURE_DEVOPS_ACCESS_TOKEN_URL;
 	if (!accessTokenUrl) {
-		const accessToken = requiredEnvironment('AZURE_DEVOPS_ACCESS_TOKEN');
+		const accessToken = requiredEnvironment('AZURE_DEVOPS_ACCESS_TOKEN', environment);
 		return async () => accessToken;
 	}
-	const commandToken = requiredEnvironment('AZURE_DEVOPS_DIFF_COMMAND_TOKEN');
+	const commandToken = requiredEnvironment('AZURE_DEVOPS_DIFF_COMMAND_TOKEN', environment);
 	return async () => {
-		const response = await fetch(accessTokenUrl, {
-			method: 'POST',
-			headers: {
-				Authorization: `Bearer ${commandToken}`,
-				'Content-Type': 'application/json',
-			},
-			body: '{}',
-		});
-		if (!response.ok) {
-			throw new Error(`Unable to obtain an Azure DevOps access token (${response.status}).`);
+		try {
+			const response = await fetch(accessTokenUrl, {
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${commandToken}`,
+					'Content-Type': 'application/json',
+				},
+				body: '{}',
+				signal: AbortSignal.timeout(requestTimeoutMs),
+			});
+			if (!response.ok) {
+				const detail = await response.text();
+				throw new Error(detail || `Unable to obtain an Azure DevOps access token (${response.status}).`);
+			}
+			const payload: unknown = await response.json();
+			if (!payload || typeof payload !== 'object' || typeof (payload as { accessToken?: unknown }).accessToken !== 'string') {
+				throw new Error('The Azure DevOps access token response was invalid.');
+			}
+			return (payload as { accessToken: string }).accessToken;
+		} catch (error) {
+			if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+				throw new Error('Azure DevOps authentication timed out. Complete sign-in, then retry the command.');
+			}
+			throw error;
 		}
-		const payload: unknown = await response.json();
-		if (!payload || typeof payload !== 'object' || typeof (payload as { accessToken?: unknown }).accessToken !== 'string') {
-			throw new Error('The Azure DevOps access token response was invalid.');
-		}
-		return (payload as { accessToken: string }).accessToken;
 	};
 }
 
@@ -395,7 +404,7 @@ async function main(): Promise<void> {
 		{ name: 'azure-devops-pull-requests', version: __AZURE_DEVOPS_MCP_VERSION__ },
 		{
 			instructions:
-				'This server manages Azure DevOps pull requests. VS Code reuses its existing Microsoft session: never invoke the Sign In command autonomously or retry it after a background refresh fails. When an operation reports missing or expired authentication, ask the user to run Sign In once; background activity shows one rate-limited sign-in notification and an Accounts indication. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Call get_pull_request only when the user asks to show, open, view, or review a specific pull request: it always renders the interactive review card. For quiet inspection, reloads, and verification after a mutation, call get_pull_request_summary instead; it returns JSON only and never opens a card. Do not ask for confirmation before showing a requested card. Use list_pull_requests only when the pull request ID is unknown. When reviewing or preparing a pull request with no linked work items, briefly offer to find and link relevant items when that would help trace the change; do not make this a prerequisite for creating, submitting, or reviewing the pull request. To draft a new pull request, call create_pull_request and present its editable card. Before calling submit_pull_request, ask whether the user wants to change the draft text and wait for explicit confirmation to submit. Use update_pull_request only after the user confirms the exact title, description, or target-branch changes; it updates remote state without opening a new card.',
+				'This server manages Azure DevOps pull requests. VS Code reuses its existing Microsoft session. Explicit tool calls request sign-in when required and resume after it completes; concurrent calls share one sign-in attempt. Never invoke the Sign In command autonomously or loop on authentication failures. If sign-in is cancelled or times out, ask the user to finish signing in before retrying the requested operation. Background refreshes never initiate sign-in and only show a rate-limited sign-in notification. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Call get_pull_request only when the user asks to show, open, view, or review a specific pull request: it always renders the interactive review card. For quiet inspection, reloads, and verification after a mutation, call get_pull_request_summary instead; it returns JSON only and never opens a card. Do not ask for confirmation before showing a requested card. Use list_pull_requests only when the pull request ID is unknown. When reviewing or preparing a pull request with no linked work items, briefly offer to find and link relevant items when that would help trace the change; do not make this a prerequisite for creating, submitting, or reviewing the pull request. To draft a new pull request, call create_pull_request and present its editable card. Before calling submit_pull_request, ask whether the user wants to change the draft text and wait for explicit confirmation to submit. Use update_pull_request only after the user confirms the exact title, description, or target-branch changes; it updates remote state without opening a new card.',
 		},
 	);
 
@@ -433,6 +442,7 @@ async function main(): Promise<void> {
 		const connection = new azureDevOps.WebApi(
 			`https://dev.azure.com/${encodeURIComponent(organization)}`,
 			azureDevOps.getBearerHandler(accessToken),
+			{ socketTimeout: 20_000 },
 		);
 		return connection.getGitApi();
 	};
@@ -442,6 +452,7 @@ async function main(): Promise<void> {
 		const connection = new azureDevOps.WebApi(
 			`https://dev.azure.com/${encodeURIComponent(organization)}`,
 			azureDevOps.getBearerHandler(accessToken),
+			{ socketTimeout: 20_000 },
 		);
 		return connection.getWorkItemTrackingApi();
 	};
@@ -451,6 +462,7 @@ async function main(): Promise<void> {
 		const connection = new azureDevOps.WebApi(
 			`https://dev.azure.com/${encodeURIComponent(organization)}`,
 			azureDevOps.getBearerHandler(accessToken),
+			{ socketTimeout: 20_000 },
 		);
 		const connectionData = await connection.connect();
 		const userId = connectionData.authenticatedUser?.id;
@@ -1166,4 +1178,6 @@ async function main(): Promise<void> {
 	await server.connect(new StdioServerTransport());
 }
 
-void main();
+if (require.main === module) {
+	void main();
+}
