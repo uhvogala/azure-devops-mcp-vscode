@@ -14,6 +14,8 @@ import { join } from 'node:path';
 import * as VSSInterfaces from 'azure-devops-node-api/interfaces/common/VSSInterfaces';
 import * as z from 'zod/v4';
 import { loadPullRequestReview, reviewerSummary } from './pull-request-review';
+import { registerPipelineTools } from './pipeline-tools';
+import { mcpServerInfo, mcpServerInstructions } from './mcp-guidance';
 
 const repositorySchema = {
 	organization: z.string().min(1).describe('Azure DevOps organization name.'),
@@ -401,10 +403,9 @@ async function invokeExtensionCommand(urlEnvironment: string, arguments_: object
 async function main(): Promise<void> {
 	const getAccessToken = createTokenProvider();
 	const server = new McpServer(
-		{ name: 'azure-devops-pull-requests', version: __AZURE_DEVOPS_MCP_VERSION__ },
+		{ ...mcpServerInfo, version: __AZURE_DEVOPS_MCP_VERSION__ },
 		{
-			instructions:
-				'This server manages Azure DevOps pull requests. VS Code reuses its existing Microsoft session. Explicit tool calls request sign-in when required and resume after it completes; concurrent calls share one sign-in attempt. Never invoke the Sign In command autonomously or loop on authentication failures. If sign-in is cancelled or times out, ask the user to finish signing in before retrying the requested operation. Background refreshes never initiate sign-in and only show a rate-limited sign-in notification. When organization, project, or repository are unknown, call get_workspace_repositories once before using any repository-scoped tool; use activeRepository when present, otherwise ask the user to choose from repositories. Call get_pull_request only when the user asks to show, open, view, or review a specific pull request: it always renders the interactive review card. For quiet inspection, reloads, and verification after a mutation, call get_pull_request_summary instead; it returns JSON only and never opens a card. Do not ask for confirmation before showing a requested card. Use list_pull_requests only when the pull request ID is unknown. When reviewing or preparing a pull request with no linked work items, briefly offer to find and link relevant items when that would help trace the change; do not make this a prerequisite for creating, submitting, or reviewing the pull request. To draft a new pull request, call create_pull_request and present its editable card. Before calling submit_pull_request, ask whether the user wants to change the draft text and wait for explicit confirmation to submit. Use update_pull_request only after the user confirms the exact title, description, or target-branch changes; it updates remote state without opening a new card.',
+			instructions: mcpServerInstructions,
 		},
 	);
 
@@ -428,7 +429,7 @@ async function main(): Promise<void> {
 	server.registerTool(
 		'get_workspace_repositories',
 		{
-			description: 'Get Azure DevOps organization, project, and repository values for all repositories in the current VS Code workspace. Use this once when repository identifiers are unknown; activeRepository identifies the active editor repository when available.',
+			description: 'Discover Azure DevOps repositories for pull requests and CI pipelines. Returns organization, project, repository and currentBranch for the VS Code workspace. Use once when identifiers are unknown; activeRepository identifies the active editor repository. Then use list_pipelines with repository to discover CI definitions, or PR tools for pull requests.',
 			inputSchema: z.object({}),
 		},
 		async () => {
@@ -446,6 +447,20 @@ async function main(): Promise<void> {
 		);
 		return connection.getGitApi();
 	};
+
+	const getPipelineConnection = async (organization: string) => {
+		const connection = new azureDevOps.WebApi(
+			`https://dev.azure.com/${encodeURIComponent(organization)}`,
+			azureDevOps.getBearerHandler(await getAccessToken()),
+			{ socketTimeout: 20_000 },
+		);
+		return connection;
+	};
+	registerPipelineTools(server, {
+		getBuildApi: async organization => (await getPipelineConnection(organization)).getBuildApi(),
+		getGitApi,
+		getPipelinesApi: async organization => (await getPipelineConnection(organization)).getPipelinesApi(),
+	});
 
 	const getWorkItemTrackingApi = async (organization: string) => {
 		const accessToken = await getAccessToken();

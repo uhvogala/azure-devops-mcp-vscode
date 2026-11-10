@@ -4,6 +4,30 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.87]
+
+- Add pipeline run-status and bounded task-log chat cards using the existing PR card theme, with task timelines, manual refresh, and Azure DevOps links.
+- Add log paging, copy, line numbers, timestamps, and warning/error highlighting while rendering untrusted log content as plain text.
+- Expose explicit show tools for cards and retain quiet JSON tools for analysis and in-card navigation.
+
+## [0.0.86]
+
+- Use an explicit pipeline-definition sort order so timestamp continuation tokens can be followed without ambiguity.
+- Translate zero-based log offsets to Azure DevOps' one-based inclusive ranges, preventing duplicated lines and oversized reads at nonzero offsets.
+
+## [0.0.85]
+
+- Preserve Azure DevOps pagination headers when listing pipelines and runs, with HTTP-level regression coverage for continuation tokens.
+- Adjust log-range boundaries and add initial single-line and paged-read regression coverage.
+
+## [0.0.84]
+
+- Add CI pipeline discovery, execution, cancellation, run timelines, and bounded log-reading MCP tools using the existing Microsoft session.
+- Add confirmed, revision-checked definition edits and conflict-safe Azure Repos pipeline YAML commits, preserving secret variables.
+- Advertise PR and pipeline support in extension discovery, MCP server metadata, and tool titles while keeping existing extension and provider IDs.
+- Publish structured agent workflows in the MCP initialization response, with PR-to-CI diagnosis, ID and input guidance, confirmation requirements, safe retries, and untrusted-content handling.
+- Verify agent-visible instructions and pipeline tool schemas against the bundled server over MCP stdio before authentication.
+
 ## [0.0.83]
 
 - Start Microsoft sign-in when an explicit MCP tool cannot recover its session silently, and share the attempt across concurrent calls.

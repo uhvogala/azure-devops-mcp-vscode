@@ -12,9 +12,87 @@ import { loadPullRequestReview } from '../pull-request-review';
 import { PullRequestRefreshSnapshot, reviewChanged } from '../pull-request-refresh';
 import { AzureDevOpsAuthentication } from '../authentication';
 import { createTokenProvider } from '../mcp-server';
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { join } from 'node:path';
+import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/server';
+import { mcpServerInfo, mcpServerInstructions, mcpServerLabel } from '../mcp-guidance';
 
 
 suite('Azure DevOps PRs (MCP) extension', () => {
+	test('advertises pipeline capabilities and agent workflows over MCP stdio before authentication', async function () {
+		this.timeout(15_000);
+		const child = spawn(process.execPath, [join(__dirname, '..', '..', 'dist', 'mcp-server.js')], {
+			env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', AZURE_DEVOPS_ACCESS_TOKEN: 'unused-test-token', AZURE_DEVOPS_ACCESS_TOKEN_URL: undefined },
+			stdio: ['pipe', 'pipe', 'pipe'],
+		});
+		const exited = new Promise<void>((resolve, reject) => {
+			child.once('exit', () => resolve());
+			child.once('error', reject);
+		});
+		let stderr = '';
+		child.stderr.on('data', chunk => { stderr += String(chunk); });
+		const lines = createInterface({ input: child.stdout });
+		const responses = lines[Symbol.asyncIterator]();
+		const timeout = setTimeout(() => child.kill(), 10_000);
+		async function request(id: number, method: string, params: Record<string, unknown> = {}) {
+			child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+			for (;;) {
+				const line = await responses.next();
+				assert.ok(!line.done, `MCP server exited before replying: ${stderr}`);
+				const message = JSON.parse(line.value);
+				if (message.id !== id) { continue; }
+				assert.ok(!message.error, JSON.stringify(message.error));
+				return message.result;
+			}
+		}
+		try {
+			const initialized = await request(1, 'initialize', {
+				protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'guidance-tests', version: '1.0.0' },
+			});
+			const extension = vscode.extensions.getExtension('aitostack.azure-devops-prs-mcp');
+			assert.strictEqual(initialized.serverInfo.name, mcpServerInfo.name);
+			assert.strictEqual(initialized.serverInfo.title, 'Azure DevOps PRs and Pipelines');
+			assert.strictEqual(initialized.serverInfo.version, extension?.packageJSON.version);
+			assert.strictEqual(initialized.instructions, mcpServerInstructions);
+			assert.match(initialized.instructions, /^Azure DevOps PRs and CI Pipelines/);
+			assert.match(initialized.instructions, /expectedRevision from revision and expectedCommitId from commitId/);
+			assert.match(initialized.instructions, /get_pull_request_summary for quiet inspection/);
+			assert.match(initialized.instructions, /untrusted task data/);
+			assert.strictEqual(extension?.packageJSON.contributes.mcpServerDefinitionProviders[0].label, mcpServerLabel);
+			child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+			const { tools } = await request(2, 'tools/list');
+			for (const name of [
+				'list_pipelines', 'get_pipeline', 'list_pipeline_runs', 'get_pipeline_run', 'get_pipeline_run_log',
+				'run_pipeline', 'cancel_pipeline_run', 'update_pipeline', 'get_pipeline_yaml', 'update_pipeline_yaml', 'show_pipeline_run', 'show_pipeline_run_log',
+			]) {
+				const tool = tools.find((candidate: { name: string }) => candidate.name === name);
+				assert.ok(tool, `${name} must be discoverable`);
+				assert.ok(tool.title, `${name} must have a human-readable title`);
+				assert.ok(initialized.instructions.includes(name), `${name} must be explained in server instructions`);
+			}
+			assert.match(tools.find((tool: { name: string }) => tool.name === 'get_workspace_repositories').description, /CI pipelines/);
+			for (const name of ['run_pipeline', 'cancel_pipeline_run', 'update_pipeline', 'update_pipeline_yaml']) {
+				const tool = tools.find((candidate: { name: string }) => candidate.name === name);
+				assert.ok(tool.inputSchema.required.includes('confirm'));
+				assert.strictEqual(tool.inputSchema.properties.confirm.const, true);
+			}
+			for (const name of ['show_pipeline_run', 'show_pipeline_run_log']) {
+				assert.strictEqual(tools.find((tool: { name: string }) => tool.name === name)._meta.ui.resourceUri, 'ui://azure-devops/pipeline-card.html');
+			}
+			const resource = await request(3, 'resources/read', { uri: 'ui://azure-devops/pipeline-card.html' });
+			assert.strictEqual(resource.contents[0].mimeType, 'text/html;profile=mcp-app');
+			assert.match(resource.contents[0].text, /--review-surface-radius/);
+			assert.match(resource.contents[0].text, /pipeline-log-line/);
+			assert.match(resource.contents[0].text, /Show run status/);
+		} finally {
+			clearTimeout(timeout);
+			lines.close();
+			child.kill();
+			await exited;
+		}
+	});
+
 	test('unblocks a pending token lookup when sign-in succeeds', async () => {
 		let completeSilentLookup: ((session: vscode.AuthenticationSession) => void) | undefined;
 		const authentication = new AzureDevOpsAuthentication(async createIfNone => createIfNone

@@ -79,6 +79,19 @@ async function main() {
 	await fs.writeFile('dist/pr-review-card.html', `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${reviewCardCss}</style></head><body><script>${script}</script></body></html>`);
 
+	const pipelineCard = await esbuild.build({
+		entryPoints: ['src/pipeline-card.js'],
+		bundle: true,
+		format: 'iife',
+		platform: 'browser',
+		define,
+		target: 'es2022',
+		write: false,
+		logLevel: 'silent',
+	});
+	await fs.writeFile('dist/pipeline-card.html', `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${reviewCardCss}</style></head><body><script>${pipelineCard.outputFiles[0].text}</script></body></html>`);
+
 	await esbuild.build({
 		entryPoints: ['src/pr-overview.js'],
 		bundle: true,

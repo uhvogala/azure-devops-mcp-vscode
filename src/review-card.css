@@ -12,3 +12,40 @@ button { min-height: 28px; border: 1px solid var(--vscode-button-border, transpa
 @media (max-width: 540px) { .file { gap: 6px; } }
 .review-card { position: relative; width: 100%; height: auto; min-height: 0; overflow: visible; padding: 12px; } body:has(.review-card) { height: auto; overflow: visible; background: var(--vscode-editor-background, var(--color-background-primary, #1e1e1e)); }
 .file { grid-template-columns: 16px minmax(0, 1fr) 50px; min-height: 40px; padding: 5px 8px 5px 10px; } .file-details { gap: 1px; } .file-actions { grid-template-columns: repeat(2, 24px); } button.file-action { width: 24px; min-height: 24px; } .file-action-icon { width: 14px; height: 14px; }
+
+.pipeline-card .pipeline-heading { min-width: 0; overflow-wrap: anywhere; }
+.pipeline-card .pipeline-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; }
+.pipeline-card button.pipeline-icon-button { flex: 0 0 28px; width: 28px; height: 28px; min-height: 28px; color: inherit; background: transparent; }
+.pipeline-card button.pipeline-icon-button:hover { background: var(--vscode-toolbar-hoverBackground, var(--color-background-hover, color-mix(in srgb, currentColor 12%, transparent))); }
+.pipeline-card button.pipeline-icon-button:focus-visible, .pipeline-card .pipeline-log:focus-visible { outline: 1px solid var(--vscode-focusBorder, var(--color-border-focus, #007fd4)); outline-offset: -1px; }
+.pipeline-card button.pipeline-icon-button:disabled { opacity: .4; cursor: default; }
+.pipeline-card .pipeline-passed { color: var(--vscode-testing-iconPassed, var(--color-text-success, #89d185)); }
+.pipeline-card .pipeline-failed { color: var(--vscode-errorForeground, var(--color-text-danger, #f48771)); }
+.pipeline-card .pipeline-warning { color: var(--vscode-editorWarning-foreground, var(--color-text-warning, #cca700)); }
+.pipeline-card .pipeline-running, .pipeline-card .pipeline-section { color: var(--vscode-textLink-foreground, var(--color-text-link, #3794ff)); }
+.pipeline-card .pipeline-muted { color: var(--vscode-descriptionForeground, var(--color-text-secondary, #9d9d9d)); }
+.pipeline-card .pipeline-error:empty { display: none; }
+.pipeline-card .pipeline-error { margin-top: 8px; }
+.pipeline-card .pipeline-metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; margin: 14px 0 16px; font-size: 12px; }
+.pipeline-card .pipeline-metadata dt { margin-bottom: 3px; color: var(--vscode-descriptionForeground, var(--color-text-secondary, #9d9d9d)); font-size: 11px; }
+.pipeline-card .pipeline-metadata dd { margin: 0; overflow-wrap: anywhere; }
+.pipeline-card .pipeline-timeline { margin-top: 12px; }
+.pipeline-card .pipeline-record { display: grid; grid-template-columns: minmax(0, 1fr) minmax(70px, auto) 54px 28px; align-items: center; gap: 8px; min-height: 42px; padding: 6px 0 6px calc(var(--pipeline-depth, 0) * 12px); border-top: 1px solid var(--vscode-panel-border, var(--color-border-primary, #3c3c3c)); font-size: 12px; }
+.pipeline-card .pipeline-record-name { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.pipeline-card .pipeline-record-status { font-size: 11px; overflow-wrap: anywhere; }
+.pipeline-card .pipeline-issue { padding: 4px 0 8px; font-size: 11px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.pipeline-card .pipeline-log-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 40px; margin-top: 8px; }
+.pipeline-card .pipeline-log { max-height: 420px; min-height: 80px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--vscode-panel-border, var(--color-border-primary, #3c3c3c)); border-radius: var(--review-surface-radius); background: var(--vscode-editorWidget-background, var(--color-background-secondary, #252526)); padding: 6px 0; }
+.pipeline-card .pipeline-log-line { display: grid; grid-template-columns: 48px 66px minmax(0, 1fr); align-items: baseline; gap: 8px; padding: 2px 10px 2px 0; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; line-height: 17px; }
+.pipeline-card .pipeline-line-number, .pipeline-card .pipeline-log-time { color: var(--vscode-descriptionForeground, var(--color-text-secondary, #9d9d9d)); font-size: 10px; white-space: nowrap; }
+.pipeline-card .pipeline-line-number { text-align: right; user-select: none; }
+.pipeline-card code.pipeline-log-message { min-width: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pipeline-card .pipeline-empty { padding: 14px 10px; color: var(--vscode-descriptionForeground, var(--color-text-secondary, #9d9d9d)); font-size: 12px; }
+@media (max-width: 420px) {
+	.pipeline-card .pipeline-header { grid-template-columns: minmax(0, 1fr); }
+	.pipeline-card .pipeline-header .pipeline-actions { justify-content: flex-start; }
+	.pipeline-card .pipeline-record { grid-template-columns: minmax(0, 1fr) 70px 28px; gap: 6px; }
+	.pipeline-card .pipeline-record > .number { display: none; }
+	.pipeline-card .pipeline-log-line { grid-template-columns: 36px minmax(0, 1fr); gap: 6px; }
+	.pipeline-card .pipeline-log-time { display: none; }
+}

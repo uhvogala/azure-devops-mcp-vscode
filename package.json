@@ -1,9 +1,9 @@
 {
   "name": "azure-devops-prs-mcp",
   "publisher": "aitostack",
-  "displayName": "Azure DevOps PRs (MCP)",
-  "description": "Interactive Azure DevOps and Azure Repos pull request review, drafts, and checkout workflows for VS Code agents and GitHub Copilot Chat through MCP.",
-  "version": "0.0.83",
+  "displayName": "Azure DevOps PRs and Pipelines (MCP)",
+  "description": "Azure DevOps pull request reviews, drafts, and CI pipeline execution, editing, and monitoring for VS Code agents and GitHub Copilot Chat through MCP.",
+  "version": "0.0.87",
   "icon": "resources/marketplace-icon.png",
   "license": "MIT",
   "repository": {
@@ -29,6 +29,8 @@
     "pr review",
     "code review",
     "pull request drafts",
+    "azure pipelines",
+    "ci pipelines",
     "mcp",
     "mcp server",
     "model context protocol",
@@ -108,7 +110,7 @@
     "mcpServerDefinitionProviders": [
       {
         "id": "azure-devops-mcp.pull-requests",
-        "label": "Azure DevOps pull requests"
+        "label": "Azure DevOps pull requests and pipelines"
       }
     ],
     "menus": {
@@ -207,7 +209,9 @@
     "@modelcontextprotocol/server": "^2.0.0",
     "azure-devops-node-api": "^15.1.2",
     "dompurify": "^3.4.13",
+    "lucide": "^1.71.0",
     "marked": "^17.0.6",
+    "strip-ansi": "^7.2.0",
     "zod": "^4.4.3"
   }
 }

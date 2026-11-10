@@ -1,8 +1,8 @@
-# Azure DevOps PRs for VS Code (MCP)
+# Azure DevOps PRs and Pipelines for VS Code (MCP)
 
 [![MCP Enabled](https://img.shields.io/badge/MCP-Enabled-orange.svg)](https://modelcontextprotocol.io/)
 
-Review, draft, and check out Azure DevOps pull requests directly in GitHub Copilot Chat and VS Code AI Agents, without personal access tokens or API keys.
+Review, draft, and check out Azure DevOps pull requests, and run, edit, and monitor CI pipelines directly in GitHub Copilot Chat and VS Code AI Agents, without personal access tokens or API keys.
 
 ## See It in Action
 
@@ -22,6 +22,7 @@ Review, draft, and check out Azure DevOps pull requests directly in GitHub Copil
 - **Smart PR drafts:** Let an agent prepare a local draft with a title, Markdown description, changed-file list, and reviewers before any remote change is made.
 - **Automatic workspace discovery:** Finds Azure DevOps repositories in the open workspace and identifies the active repository when possible.
 - **Branch checkout:** Check out a pull request source or target branch from the review card or through an agent.
+- **CI pipeline tools:** Find YAML and classic pipelines, queue and cancel runs, inspect job progress and logs, and edit definition settings or Azure Repos pipeline YAML with explicit confirmation and conflict checks.
 - **Shared live state:** Review cards and the Activity Bar stay synchronized as files are reviewed, drafts change, or comments are added.
 
 ## Quick Start
@@ -34,7 +35,7 @@ Review, draft, and check out Azure DevOps pull requests directly in GitHub Copil
 
 2. Open a folder containing an Azure DevOps Git repository. Keep VS Code's built-in Git extension enabled.
 
-3. Open GitHub Copilot Chat or another MCP-compatible agent host. VS Code discovers the local `Azure DevOps pull requests` MCP server automatically.
+3. Open GitHub Copilot Chat or another MCP-compatible agent host. VS Code discovers the local `Azure DevOps pull requests and pipelines` MCP server automatically.
 
 4. The extension reuses your existing Microsoft session. If a requested MCP tool needs a new session, complete the Microsoft sign-in flow that VS Code opens; the waiting command resumes automatically. You can also run **Azure DevOps PRs (MCP): Sign In to Azure DevOps** from the Command Palette.
 
@@ -50,10 +51,16 @@ Review, draft, and check out Azure DevOps pull requests directly in GitHub Copil
 | Find work items | `Find active work items whose title mentions authentication recovery.` |
 | Link work items | `Link work items 1234 and 5678 to PR #1042.` |
 | Check out a branch | `Check out the source branch for PR #847 locally.` |
+| Inspect PR CI | `Show the pipeline runs for PR #847 and explain the failed job.` |
+| Run CI | `Run pipeline 42 on my current branch with the Release configuration.` |
+| Monitor a run | `Check run 1234 and show the failing task's log.` |
+| Edit a pipeline | `Read pipeline 42's YAML on my PR branch and propose a fix for its test step.` |
 
 ## MCP Tools
 
 The extension runs a local [Model Context Protocol](https://modelcontextprotocol.io/) server that gives agents access to these capabilities:
+
+The server advertises **Azure DevOps PRs and Pipelines** in its MCP initialization response and includes structured agent instructions for discovery, PR reviews and drafts, work items, pipeline diagnosis, execution, and editing. These instructions and the tool catalog are available before Azure DevOps sign-in; agents do not need to read repository files or configure separate instructions to discover pipeline support. Tool descriptions include the next tool to call, ID meanings, pagination, log bounds, and confirmation requirements.
 
 Use `get_pull_request` only when the user asks to display a pull request: it always opens an interactive review card. Use `get_pull_request_summary` for quiet inspection, reloads, and verification after a mutation; it returns JSON without opening a card. `update_pull_request` also returns JSON only, so existing cards refresh through their normal polling cycle rather than opening a duplicate card.
 
@@ -81,6 +88,34 @@ Background refreshes never open interactive sign-in. When authentication is unav
 | `create_pull_request` | Prepare an editable local pull request draft without creating a remote PR. |
 | `submit_pull_request` | Create a remote pull request after explicit confirmation, optionally linking work items. |
 | `update_pull_request` | Update an active pull request's title, description, or target branch after explicit confirmation, without opening a new card. |
+| `list_pipelines` | Discover YAML and classic pipeline definitions, optionally scoped to a repository or name. |
+| `get_pipeline` | Read pipeline settings, revision, repository, YAML path, and redacted variables. |
+| `list_pipeline_runs` | Find recent CI runs by pipeline, branch, PR merge ref, or status, with pagination. |
+| `get_pipeline_run` | Read a run's status, result, timeline, issues, and task log IDs. |
+| `get_pipeline_run_log` | List a run's logs or read a bounded range of up to 1,000 lines. |
+| `show_pipeline_run` | Show a PR-styled run card with status, branch, commit, duration, and task results. |
+| `show_pipeline_run_log` | Show a PR-styled log preview with line numbers, timestamps, severity highlighting, and bounded paging. |
+| `run_pipeline` | Queue a confirmed YAML or classic run on an explicit branch, optionally pinned to a commit. |
+| `cancel_pipeline_run` | Request cancellation of a run after explicit confirmation. |
+| `update_pipeline` | Update confirmed definition settings and non-secret variables with a revision check. |
+| `get_pipeline_yaml` | Read the configured Azure Repos YAML file at an exact branch-tip commit. |
+| `update_pipeline_yaml` | Commit confirmed YAML changes to an existing branch with a branch-tip conflict check. |
+
+## CI Pipelines
+
+Pipeline tools reuse the same Microsoft session and workspace discovery as PR tools. `pipelineId` identifies a definition; `runId` identifies one execution. Repository-scoped discovery accepts the repository name or ID from `get_workspace_repositories`. Lists return continuation tokens for subsequent pages.
+
+Before queueing, cancelling, or editing, the agent must present the exact operation and obtain explicit confirmation. Runs can deploy software or trigger other side effects. YAML runs accept typed `templateParameters` and non-secret queue-time `variables`; classic runs accept string `parameters`. A manual run on a PR's source branch is not a requeue of its branch-policy validation. PR run discovery filters `refs/pull/<id>/merge`; source-branch manual runs can be found with the `branch` filter instead.
+
+Monitoring returns a current snapshot, not an unattended background watcher. Read `get_pipeline_run` for stage/job/task progress and issues, then request the relevant log ID and line range. Queued runs may not have a timeline yet. Cancellation is asynchronous, so check the run again to see its final status. Logs and YAML may contain sensitive text; review output before sharing it, and keep secrets out of tool arguments.
+
+Ask to "show this pipeline run" or "preview this task's log" to open a compact chat card using the same theme as PR reviews. Run cards include status, branch, commit, timing, task results and log buttons. Log cards provide a scrollable, line-numbered preview, copy, and previous/next ranges. Refresh is manual; cards never queue, cancel, edit, or poll pipelines. The ordinary `get_pipeline_run` and `get_pipeline_run_log` tools remain JSON-only for analysis without opening extra cards. Log content is rendered as text, not HTML.
+
+Definition edits support name, description, folder, queue status, default branch, configured YAML path, and non-secret variables. They require the revision from `get_pipeline`, preserve unrelated settings and secret variables, and reject stale edits. Classic task graphs and triggers are not editable through these tools.
+
+For YAML edits, read `get_pipeline_yaml` on the intended feature branch, review the replacement content and commit message, then confirm `update_pipeline_yaml` with the returned revision and commit ID. It creates a remote Git commit without changing the local working tree. A branch advance is rejected rather than overwritten; read and review again before retrying. YAML edits require an Azure Repos Git-backed pipeline, apply to its configured file only, and do not bypass branch policies. Template files can be edited through the normal repository workflow.
+
+Your account needs the corresponding Azure DevOps permissions to view, queue, stop, or edit builds, plus Git contribution permission for YAML commits. The extension does not elevate permissions or store additional credentials.
 
 ## Pull Request Drafts
 
@@ -108,6 +143,8 @@ npm test
 ```
 
 Run `npm run compile` to type-check, lint, and bundle the extension. Press `F5` in VS Code to launch an Extension Development Host.
+
+For a local install, run `npx @vscode/vsce package`, then `code --install-extension azure-devops-prs-mcp-<version>.vsix --force` and reload the VS Code window. Extension and MCP provider IDs stay unchanged across the PR-and-pipelines naming update. `npm test` includes a stdio handshake against the bundled server to check that its title, instructions, pipeline tools, and confirmation schemas reach MCP clients.
 
 ## Feedback and Issues
 

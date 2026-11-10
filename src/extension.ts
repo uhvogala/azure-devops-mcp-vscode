@@ -13,6 +13,7 @@ import { createServer, IncomingMessage, Server, ServerResponse } from 'node:http
 import { randomBytes } from 'node:crypto';
 import { AzureDevOpsAuthentication } from './authentication';
 import { loadPullRequestReview } from './pull-request-review';
+import { mcpServerLabel } from './mcp-guidance';
 
 const providerId = 'azure-devops-mcp.pull-requests';
 const pullRequestContentScheme = 'azure-devops-pr';
@@ -1364,7 +1365,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.lm.registerMcpServerDefinitionProvider(providerId, {
 			provideMcpServerDefinitions: () => [
 				new vscode.McpStdioServerDefinition(
-					'Azure DevOps pull requests',
+					mcpServerLabel,
 					process.execPath,
 					[context.asAbsolutePath('dist/mcp-server.js')],
 					{},
