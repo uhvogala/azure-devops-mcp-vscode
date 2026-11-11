@@ -3,7 +3,7 @@
   "publisher": "aitostack",
   "displayName": "Azure DevOps PRs and Pipelines (MCP)",
   "description": "Azure DevOps pull request reviews, drafts, and CI pipeline execution, editing, and monitoring for VS Code agents and GitHub Copilot Chat through MCP.",
-  "version": "0.0.87",
+  "version": "0.0.93",
   "icon": "resources/marketplace-icon.png",
   "license": "MIT",
   "repository": {
@@ -43,6 +43,44 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Azure DevOps PRs and Pipelines",
+      "properties": {
+        "azure-devops-mcp.experimentalPipelineListeners": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "tags": ["experimental"],
+          "description": "Enable experimental MCP Tasks and Copilot-runtime pipeline listeners. Requires a window reload. Not needed for native pipeline completion notifications."
+        }
+      }
+    },
+    "languageModelTools": [
+      {
+        "name": "azure_devops_pipeline_listener",
+        "toolReferenceName": "pipelineListener",
+        "displayName": "Watch Pipeline Completion",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Receive pipeline completion through this conversation's tracked terminal.",
+        "modelDescription": "Native VS Code pipeline completion listener, not MCP. Start bounded monitoring and attach the tracked terminal in ONE call with organization/project/runId/timeoutSeconds (1-7200), or attach to watchId from watch_pipeline_run. mode:inspect reports terminal capabilities and whether a host-issued opaque chat token is present; never pass or fabricate that token. probe:true with delaySeconds/result/timeoutSeconds runs a LOCAL simulation without Azure. The host tracks terminal completion; active and idle delivery were verified on macOS, but other hosts may differ. Chat Stop may suppress continuation while bounded monitoring continues: never automatically relaunch; inspect status only after the user resumes. No Azure run is queued/cancelled, no credentials are passed to the CLI, and terminal visibility settings are preserved. Missing context or incompatible terminal schemas are reported instead of falling back to an untracked process. Requires Node.js 20+ on the terminal PATH. Watches are window-local and lost on reload/shutdown.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["inspect", "terminal"] },
+            "watchId": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "organization": { "type": "string", "minLength": 1 },
+            "project": { "type": "string", "minLength": 1 },
+            "runId": { "type": "integer", "minimum": 1 },
+            "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 7200 },
+            "probe": { "type": "boolean" },
+            "delaySeconds": { "type": "integer", "minimum": 1, "maximum": 120 },
+            "result": { "type": "string", "enum": ["Succeeded", "Failed"] },
+            "terminalToolName": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {
@@ -66,6 +104,12 @@
       ]
     },
     "commands": [
+      {
+        "command": "azure-devops-mcp.installPipelineRuntimePrototype",
+        "title": "Install Pipeline Runtime Listener Prototype",
+        "category": "Azure DevOps PRs (MCP)",
+        "enablement": "config.azure-devops-mcp.experimentalPipelineListeners"
+      },
       {
         "command": "azure-devops-mcp.signIn",
         "title": "Sign In to Azure DevOps",
@@ -114,6 +158,12 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "azure-devops-mcp.installPipelineRuntimePrototype",
+          "when": "config.azure-devops-mcp.experimentalPipelineListeners"
+        }
+      ],
       "comments/commentThread/title": [
         {
           "command": "azure-devops-mcp.replyToPullRequestComment",

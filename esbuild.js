@@ -32,7 +32,9 @@ async function main() {
 	const ctx = await esbuild.context({
 		entryPoints: [
 			'src/extension.ts',
-			'src/mcp-server.ts'
+			'src/mcp-server.ts',
+			'src/pipeline-wait.ts',
+			'src/pipeline-runtime.ts'
 		],
 		bundle: true,
 		format: 'cjs',

@@ -11,19 +11,367 @@ import {
 import { loadPullRequestReview } from '../pull-request-review';
 import { PullRequestRefreshSnapshot, reviewChanged } from '../pull-request-refresh';
 import { AzureDevOpsAuthentication } from '../authentication';
-import { createTokenProvider } from '../mcp-server';
+import { createPipelineWatchController, createTokenProvider } from '../mcp-server';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/server';
 import { mcpServerInfo, mcpServerInstructions, mcpServerLabel } from '../mcp-guidance';
+import { BuildResult, BuildStatus } from 'azure-devops-node-api/interfaces/BuildInterfaces';
+import { PipelineWatchStore, waitForPipelineWatchResult } from '../pipeline-watch';
+import { experimentalPipelineListenersEnabled, inspectPipelineListenerHost, installPipelineRuntimeCompanion, nativePipelineListenerInputSchema, NativePipelineListenerTool } from '../pipeline-listener-tools';
+import { pipelineListenerCommand, pipelineListenerHandoffSchema, pipelineTerminalInput, selectPipelineTerminalTool } from '../pipeline-listeners';
+import { createPipelineRuntimeTools, PipelineRuntimeSession } from '../pipeline-runtime';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 
+suite('Pipeline listener routes', () => {
+	const terminal = { name: 'run_in_terminal', inputSchema: { type: 'object', properties: {
+		command: { type: 'string' }, mode: { enum: ['sync', 'async'] }, explanation: { type: 'string' }, goal: { type: 'string' },
+	}, required: ['command', 'mode', 'explanation', 'goal'] } };
+	const handoff = { resultUrl: `http://127.0.0.1:1234/pipeline-watch-result/${'a'.repeat(64)}`, timeoutSeconds: 60 };
+
+	test('registers the native tool in the real VS Code language-model tool catalog', async () => {
+		await vscode.extensions.getExtension('aitostack.azure-devops-prs-mcp')!.activate();
+		const tool = vscode.lm.tools.find(tool => tool.name === 'azure_devops_pipeline_listener');
+		assert.ok(tool);
+		assert.ok(tool.inputSchema && 'properties' in tool.inputSchema);
+	});
+
+	test('reports the registered canvas setting behind runtime extension discovery', () => {
+		const inspection = inspectPipelineListenerHost();
+		const configuration = vscode.workspace.getConfiguration('chat.canvases');
+		assert.ok(configuration.inspect('enabled'));
+		assert.strictEqual(inspection.runtimeExtensionsOptInSetting, 'chat.canvases.enabled');
+		assert.strictEqual(inspection.runtimeExtensionsOptIn, configuration.get('enabled', false));
+		assert.strictEqual(inspection.terminalOutputLocation, vscode.workspace.getConfiguration('chat.tools.terminal').get('outputLocation', 'chat'));
+		assert.strictEqual(vscode.workspace.getConfiguration('azure-devops-mcp').inspect('experimentalPipelineListeners')?.defaultValue, false);
+		assert.strictEqual(inspection.experimentalListenersEnabled, experimentalPipelineListenersEnabled());
+	});
+
+	test('installs and refreshes only its owned runtime companion', async () => {
+		const directory = await mkdtemp(join(tmpdir(), 'azure-pipeline-companion-'));
+		const target = join(directory, 'extension.mjs');
+		try {
+			assert.strictEqual(await installPipelineRuntimeCompanion('/first-install', target, true), false);
+			assert.strictEqual(await installPipelineRuntimeCompanion('/first-install', target), true);
+			assert.match(await readFile(target, 'utf8'), /first-install/);
+			await installPipelineRuntimeCompanion('/second-install', target, true);
+			assert.match(await readFile(target, 'utf8'), /second-install/);
+			await installPipelineRuntimeCompanion('/second-install', target, true, false);
+			const disabled = await readFile(target, 'utf8');
+			assert.match(disabled, /pipelineRuntimeEnabled = false/);
+			assert.doesNotMatch(disabled, /startRuntimePipelineExtension|joinSession|createRequire/);
+			await writeFile(target, 'unrelated user extension');
+			await assert.rejects(() => installPipelineRuntimeCompanion('/third-install', target), /unmanaged/);
+			assert.strictEqual(await readFile(target, 'utf8'), 'unrelated user extension');
+		} finally { await rm(directory, { recursive: true, force: true }); }
+	});
+
+	test('rejects credentials, arbitrary commands and non-result URLs before listener launch', () => {
+		for (const resultUrl of ['https://example.com', 'http://localhost:1234/pipeline-watch-result/' + 'a'.repeat(64),
+			'http://127.0.0.1:1234/access-token', handoff.resultUrl + '?token=secret', handoff.resultUrl.replace('127.0.0.1', 'user:secret@127.0.0.1')]) {
+			assert.strictEqual(pipelineListenerHandoffSchema.safeParse({ ...handoff, resultUrl }).success, false);
+		}
+		assert.strictEqual(pipelineListenerHandoffSchema.safeParse({ ...handoff, command: 'arbitrary' }).success, false);
+		assert.match(pipelineListenerCommand('/path with spaces/pipeline-wait.js', handoff), /'\/path with spaces\/pipeline-wait.js'/);
+		assert.strictEqual(pipelineListenerHandoffSchema.safeParse({ ...handoff, timeoutSeconds: 7206 }).success, false);
+	});
+
+	test('selects only terminal tools and refuses incompatible schemas', () => {
+		assert.strictEqual(selectPipelineTerminalTool([{ name: 'delete_everything' }, terminal]).name, terminal.name);
+		assert.throws(() => selectPipelineTerminalTool([{ name: 'delete_everything' }]), /No matching terminal/);
+		assert.throws(() => selectPipelineTerminalTool([terminal], 'delete_everything'), /No matching terminal/);
+		assert.strictEqual(pipelineTerminalInput(terminal, 'bounded listener', 60).mode, 'async');
+		assert.throws(() => pipelineTerminalInput({ name: 'bash', inputSchema: { properties: { command: {} }, required: ['unknown'] } }, '', 60), /unsupported inputs/);
+		assert.throws(() => pipelineTerminalInput({ name: 'bash', inputSchema: { properties: { command: {}, mode: { enum: ['sync'] } } } }, '', 60), /does not support/);
+	});
+
+	test('requires a legitimate native invocation token before starting a watch', async () => {
+		const tool = new NativePipelineListenerTool(async () => { throw new Error('Must not create a watch'); }, '/pipeline-wait.js');
+		const cancellation = new vscode.CancellationTokenSource();
+		try {
+			await assert.rejects(() => tool.invoke({ input: { probe: true }, toolInvocationToken: undefined }, cancellation.token), /host-issued native toolInvocationToken/);
+			await assert.rejects(() => tool.invoke({ input: { probe: true, toolInvocationToken: { sessionId: 'forged' } }, toolInvocationToken: undefined }, cancellation.token), /Unrecognized key/);
+			const result = await tool.invoke({ input: { mode: 'inspect' }, toolInvocationToken: undefined }, cancellation.token);
+			assert.ok(result.content[0] instanceof vscode.LanguageModelTextPart);
+			assert.strictEqual(JSON.parse(result.content[0].value).receivedHostInvocationToken, false);
+		} finally { cancellation.dispose(); }
+	});
+
+	test('executes the bounded CLI through the runtime native tool pipeline in one call', async () => {
+		assert.strictEqual(nativePipelineListenerInputSchema.safeParse({ probe: true }).success, true);
+		const calls: { name: string; arguments: Record<string, unknown>; toolCallId: string }[] = [];
+		const tools = createPipelineRuntimeTools(() => ({ rpc: {
+			tools: { getBuiltinDescriptors: async () => ({ tools: [terminal] }), getCurrentMetadata: async () => ({ tools: [{ name: 'mcp_azure_start_pipeline_watch_probe' }] }),
+				execute: async input => { calls.push(input); return input.name.endsWith('start_pipeline_watch_probe')
+					? { textResultForLlm: JSON.stringify({ wait: { args: ['helper', '--url', handoff.resultUrl, '--timeout-seconds', '60'] } }) }
+					: { resultType: 'success', textResultForLlm: 'native terminal result' }; } },
+			tasks: { register: async () => { throw new Error('No task expected'); }, update: async () => { throw new Error('No task expected'); } },
+		} }), '/pipeline-wait.js');
+		const response = await tools.find(tool => tool.name === 'azure_pipeline_runtime_terminal')!.handler({ probe: true });
+		assert.strictEqual(response.resultType, 'success');
+		assert.strictEqual(calls.length, 2);
+		assert.strictEqual(calls[0]!.name, 'mcp_azure_start_pipeline_watch_probe');
+		assert.strictEqual(calls[1]!.name, 'run_in_terminal');
+		assert.strictEqual(calls[1]!.arguments.mode, 'async');
+		assert.match(String(calls[1]!.arguments.command), /pipeline-wait\.js/);
+		assert.ok(!String(calls[1]!.arguments.command).includes('secret'));
+	});
+
+	test('rejects ambiguous listener targets before creating a watch', () => {
+		const run = { organization: 'org', project: 'project', runId: 1, timeoutSeconds: 30 };
+		for (const input of [{}, { ...run, probe: true }, { ...run, result: 'Failed' },
+			{ watchId: 'a'.repeat(64), ...run }, { watchId: 'a'.repeat(64), probe: true }]) {
+			assert.strictEqual(nativePipelineListenerInputSchema.safeParse(input).success, false);
+		}
+		for (const input of [run, { probe: true }, { watchId: 'a'.repeat(64) }, { mode: 'inspect' }]) {
+			assert.strictEqual(nativePipelineListenerInputSchema.safeParse(input).success, true);
+		}
+	});
+
+	test('publishes real local watch outcomes through the client-task update API', async function () {
+		this.timeout(15_000);
+		for (const pipelineResult of ['Succeeded', 'Failed', 'cancel'] as const) {
+			const store = new PipelineWatchStore(async () => { throw new Error('No Azure access expected'); });
+			const sharedState = new SharedWorkspaceStateStore({ get: <T>(_key: string, value?: T): T => value as T, update: async () => {} });
+			const bridge = new PullRequestCommandBridge(async () => {}, async () => {}, async () => '', async () => ({ repositories: [] }), sharedState,
+				async () => { throw new Error('No authentication expected'); }, store);
+			let publish!: (input: object) => void;
+			const updated = new Promise<object>(resolve => { publish = resolve; });
+			const session: PipelineRuntimeSession = { rpc: {
+				tools: { getBuiltinDescriptors: async () => ({ tools: [terminal] }), getCurrentMetadata: async () => ({ tools: [] }), execute: async () => { throw new Error('No terminal expected'); } },
+				tasks: { register: async () => ({ task: { id: 'runtime-task', sequence: 0 } }), update: async input => { publish(input); return {}; } },
+			} };
+			try {
+				const watch = await bridge.controlPipelineWatch({ action: 'probe', request: { delaySeconds: 1, timeoutSeconds: 5, result: pipelineResult === 'Failed' ? 'Failed' : 'Succeeded' } }) as { watch: { watchId: string }; wait: { args: string[] } };
+				const tools = createPipelineRuntimeTools(() => session, '/pipeline-wait.js');
+				const response = await tools.find(tool => tool.name === 'azure_pipeline_runtime_task')!.handler({ resultUrl: watch.wait.args[2], timeoutSeconds: Number(watch.wait.args[4]) });
+				assert.strictEqual(JSON.parse(response.textResultForLlm).returnsImmediately, true);
+				assert.strictEqual(store.get(watch.watch.watchId).state, 'watching');
+				if (pipelineResult === 'cancel') { await tools.find(tool => tool.name === 'azure_pipeline_runtime_cancel')!.handler({ taskId: 'runtime-task' }); }
+				const update = await updated as { sequence: number; update: { kind: string; error?: string; result?: { result: string } } };
+				assert.strictEqual(update.sequence, 1);
+				assert.strictEqual(update.update.kind, pipelineResult === 'cancel' ? 'cancelled' : pipelineResult === 'Failed' ? 'failed' : 'completed');
+				if (pipelineResult === 'cancel') { assert.strictEqual(store.get(watch.watch.watchId).state, 'watching'); }
+				else if (pipelineResult === 'Failed') { assert.match(update.update.error!, /pipeline result Failed/); assert.strictEqual(update.update.result, undefined); }
+				else { assert.strictEqual(update.update.result?.result, pipelineResult); }
+			} finally { bridge.dispose(); sharedState.dispose(); }
+		}
+	});
+});
+
+suite('Pipeline watch prototype', () => {
+	const request = { organization: 'example-org', project: 'example-project', runId: 100, timeoutSeconds: 1 };
+
+	test('aborts a direct result connection without stopping its bounded watch', async () => {
+		let ready!: () => void;
+		const connected = new Promise<void>(resolve => { ready = resolve; });
+		const store = new class extends PipelineWatchStore {
+			public override wait(watchId: string) { const result = super.wait(watchId); ready(); return result; }
+		}(() => new Promise(() => {}));
+		const sharedState = new SharedWorkspaceStateStore({ get: <T>(_key: string, value?: T): T => value as T, update: async () => {} });
+		const bridge = new PullRequestCommandBridge(async () => {}, async () => {}, async () => '', async () => ({ repositories: [] }), sharedState,
+			async () => { throw new Error('No Azure authentication expected'); }, store);
+		try {
+			const control = createPipelineWatchController(await bridge.getServerEnvironment());
+			const handoff = await control({ action: 'start', request: { ...request, timeoutSeconds: 5 } }) as { watch: { watchId: string }; wait: { args: string[] } };
+			const controller = new AbortController();
+			const result = waitForPipelineWatchResult(handoff.wait.args[2]!, 5, controller.signal);
+			const rejected = assert.rejects(result, /abort/i);
+			await connected;
+			controller.abort();
+			await rejected;
+			assert.strictEqual(store.get(handoff.watch.watchId).state, 'watching');
+			await control({ action: 'stop', watchId: handoff.watch.watchId });
+		} finally { bridge.dispose(); sharedState.dispose(); }
+	});
+
+	test('hands one result to a real CLI process without sharing Azure or bridge credentials', async function () {
+		this.timeout(15_000);
+		for (const result of [BuildResult.Succeeded, BuildResult.Failed]) {
+			const store = new PipelineWatchStore(async () => ({ status: BuildStatus.Completed, result }));
+			const sharedState = new SharedWorkspaceStateStore({ get: <T>(_key: string, value?: T): T => value as T, update: async () => {} });
+			const bridge = new PullRequestCommandBridge(async () => {}, async () => {}, async () => '', async () => ({ repositories: [] }), sharedState,
+				async () => { throw new Error('The CLI must not request Azure credentials'); }, store);
+			try {
+				const environment = await bridge.getServerEnvironment();
+				const post = (body: object, token = environment.AZURE_DEVOPS_DIFF_COMMAND_TOKEN) => fetch(environment.AZURE_DEVOPS_PIPELINE_WATCH_URL, {
+					method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+				});
+				assert.strictEqual((await post({ action: 'list' }, 'wrong-token')).status, 404);
+				assert.strictEqual((await post({ action: 'start', request: { ...request, timeoutSeconds: 7201 } })).status, 400);
+				const control = createPipelineWatchController(environment);
+				const handoff = await control({ action: 'start', request }) as { watch: { watchId: string }; wait: { executable: string; args: string[]; command: string } };
+				assert.ok(!JSON.stringify(handoff).includes(environment.AZURE_DEVOPS_DIFF_COMMAND_TOKEN!));
+				assert.strictEqual(handoff.wait.executable, 'node');
+				assert.match(handoff.wait.command, /pipeline-wait\.js/);
+				const child = spawn(process.execPath, [join(__dirname, '..', '..', 'dist', 'pipeline-wait.js'), ...handoff.wait.args.slice(1)], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+				let stdout = '', stderr = '';
+				child.stdout.on('data', chunk => { stdout += String(chunk); });
+				child.stderr.on('data', chunk => { stderr += String(chunk); });
+				const deadline = setTimeout(() => child.kill(), 5000);
+				try {
+					const code = await new Promise<number | null>((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
+					assert.strictEqual(code, result === BuildResult.Succeeded ? 0 : 1, stderr);
+					assert.strictEqual(JSON.parse(stdout).state, 'completed');
+					assert.strictEqual(JSON.parse(stdout).result, BuildResult[result]);
+				} finally { clearTimeout(deadline); child.kill(); }
+				const listed = await post({ action: 'list' });
+				assert.strictEqual((await listed.json() as { watches: unknown[] }).watches.length, 1);
+				assert.strictEqual((await fetch(new URL(`/pipeline-watch-result/${'0'.repeat(64)}`, environment.AZURE_DEVOPS_PIPELINE_WATCH_URL))).status, 404);
+			} finally { bridge.dispose(); sharedState.dispose(); }
+		}
+	});
+
+	test('keeps background authentication silent and reports its failure to the CLI result route', async () => {
+		const sharedState = new SharedWorkspaceStateStore({ get: <T>(_key: string, value?: T): T => value as T, update: async () => {} });
+		const interactiveRequests: boolean[] = [];
+		const bridge = new PullRequestCommandBridge(async () => {}, async () => {}, async () => '', async () => ({ repositories: [] }), sharedState,
+			async interactive => { interactiveRequests.push(interactive); throw new Error('sensitive authentication details'); });
+		try {
+			const environment = await bridge.getServerEnvironment();
+			const started = await fetch(environment.AZURE_DEVOPS_PIPELINE_WATCH_URL, {
+				method: 'POST', headers: { Authorization: `Bearer ${environment.AZURE_DEVOPS_DIFF_COMMAND_TOKEN}`, 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action: 'start', request }),
+			});
+			const handoff = await started.json() as { wait: { args: string[] } };
+			const result = await fetch(handoff.wait.args[2]!);
+			assert.strictEqual((await result.json() as { state: string }).state, 'error');
+			assert.deepStrictEqual(interactiveRequests, [false]);
+		} finally { bridge.dispose(); sharedState.dispose(); }
+	});
+
+	test('delivers timeout, explicit stop and host disposal to pending HTTP waiters', async function () {
+		this.timeout(10_000);
+		for (const outcome of ['timed_out', 'stop', 'dispose']) {
+			let ready!: () => void;
+			const waiterReady = new Promise<void>(resolve => { ready = resolve; });
+			const store = new class extends PipelineWatchStore {
+				public override wait(watchId: string) { const result = super.wait(watchId); ready(); return result; }
+			}(() => new Promise(() => {}));
+			const sharedState = new SharedWorkspaceStateStore({ get: <T>(_key: string, value?: T): T => value as T, update: async () => {} });
+			const bridge = new PullRequestCommandBridge(async () => {}, async () => {}, async () => '', async () => ({ repositories: [] }), sharedState,
+				async () => { throw new Error('No Azure authentication expected'); }, store);
+			try {
+				const control = createPipelineWatchController(await bridge.getServerEnvironment());
+				const handoff = await control({ action: 'start', request }) as { watch: { watchId: string }; wait: { args: string[] } };
+				const waiting = fetch(handoff.wait.args[2]!, { signal: AbortSignal.timeout(3000) });
+				await waiterReady;
+				if (outcome === 'stop') { await control({ action: 'stop', watchId: handoff.watch.watchId }); }
+				if (outcome === 'dispose') { bridge.dispose(); }
+				const response = await waiting;
+				assert.strictEqual(response.status, 200);
+				const result = await response.json() as { state: string; message: string };
+				assert.strictEqual(result.state, outcome === 'timed_out' ? 'timed_out' : 'stopped');
+				assert.match(result.message, /not cancelled/);
+			} finally { bridge.dispose(); sharedState.dispose(); }
+		}
+	});
+
+	test('terminating the CLI leaves bounded polling active until the watch is explicitly stopped', async function () {
+		this.timeout(10_000);
+		let ready!: () => void;
+		const waiterReady = new Promise<void>(resolve => { ready = resolve; });
+		let nextRead: (() => void) | undefined;
+		const store = new class extends PipelineWatchStore {
+			public override wait(watchId: string) { const result = super.wait(watchId); ready(); return result; }
+		}(async () => { nextRead?.(); return { status: BuildStatus.InProgress }; }, 10);
+		const sharedState = new SharedWorkspaceStateStore({ get: <T>(_key: string, value?: T): T => value as T, update: async () => {} });
+		const bridge = new PullRequestCommandBridge(async () => {}, async () => {}, async () => '', async () => ({ repositories: [] }), sharedState,
+			async () => { throw new Error('No Azure authentication expected'); }, store);
+		try {
+			const control = createPipelineWatchController(await bridge.getServerEnvironment());
+			const handoff = await control({ action: 'start', request: { ...request, timeoutSeconds: 5 } }) as { watch: { watchId: string }; wait: { args: string[] } };
+			const child = spawn(process.execPath, [join(__dirname, '..', '..', 'dist', 'pipeline-wait.js'), ...handoff.wait.args.slice(1)], {
+				env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+			});
+			const exited = new Promise<void>((resolve, reject) => { child.once('close', () => resolve()); child.once('error', reject); });
+			const deadline = setTimeout(() => child.kill(), 5000);
+			try {
+				await Promise.race([waiterReady, exited.then(() => { throw new Error('CLI exited before attaching'); })]);
+				child.kill();
+				await exited;
+				await new Promise<void>(resolve => { nextRead = resolve; });
+				assert.strictEqual(store.list()[0]?.state, 'watching');
+				const waiting = fetch(handoff.wait.args[2]!, { signal: AbortSignal.timeout(3000) });
+				const stopped = await control({ action: 'stop', watchId: handoff.watch.watchId });
+				assert.strictEqual((stopped.watch as { state: string }).state, 'stopped');
+				assert.strictEqual((await (await waiting).json() as { state: string }).state, 'stopped');
+			} finally { clearTimeout(deadline); child.kill(); await exited; }
+		} finally { bridge.dispose(); sharedState.dispose(); }
+	});
+
+	test('returns immediately and delivers a completed failed run without treating it as a monitor error', async () => {
+		let reads = 0;
+		const store = new PipelineWatchStore(async () => ++reads === 1
+			? { status: BuildStatus.InProgress }
+			: { status: BuildStatus.Completed, result: BuildResult.Failed, sourceVersion: 'commit-under-test' }, 1);
+		try {
+			const watch = store.start(request);
+			assert.strictEqual(watch.state, 'watching');
+			assert.strictEqual(store.start(request).watchId, watch.watchId);
+			const result = await store.wait(watch.watchId);
+			assert.strictEqual(result.state, 'completed');
+			assert.strictEqual(result.result, 'Failed');
+			assert.strictEqual(result.sourceVersion, 'commit-under-test');
+			assert.strictEqual(reads, 2);
+			assert.strictEqual(store.list().length, 1);
+		} finally { store.dispose(); }
+	});
+
+	test('stops only the watcher, including an in-flight status read', async () => {
+		let completeRead!: (value: { status: BuildStatus }) => void;
+		const store = new PipelineWatchStore(() => new Promise(resolve => { completeRead = resolve; }));
+		try {
+			const watch = store.start(request);
+			const result = store.wait(watch.watchId);
+			assert.strictEqual(store.stop(watch.watchId).state, 'stopped');
+			completeRead({ status: BuildStatus.Completed });
+			assert.strictEqual((await result).state, 'stopped');
+			assert.match((await result).message ?? '', /not cancelled/);
+		} finally { store.dispose(); }
+	});
+
+	test('enforces its deadline even when a status request never settles', async () => {
+		const store = new PipelineWatchStore(() => new Promise(() => {}));
+		try {
+			const watch = store.start({ ...request, timeoutSeconds: 0.01 });
+			assert.strictEqual((await store.wait(watch.watchId)).state, 'timed_out');
+		} finally { store.dispose(); }
+	});
+
+	test('never substitutes an existing longer watch for a shorter requested bound', () => {
+		const store = new PipelineWatchStore(() => new Promise(() => {}));
+		try {
+			const longer = store.start({ ...request, timeoutSeconds: 30 });
+			const shorter = store.start(request);
+			assert.notStrictEqual(shorter.watchId, longer.watchId);
+			assert.ok(Date.parse(shorter.expiresAt) < Date.parse(longer.expiresAt));
+			assert.strictEqual(store.start(request).expiresAt, shorter.expiresAt);
+		} finally { store.dispose(); }
+	});
+
+	test('reports authentication failures without leaking request details or retrying', async () => {
+		let reads = 0;
+		const store = new PipelineWatchStore(async () => { reads++; throw new Error('sensitive request details'); });
+		try {
+			const watch = store.start(request);
+			const result = await store.wait(watch.watchId);
+			assert.strictEqual(result.state, 'error');
+			assert.doesNotMatch(JSON.stringify(result), /sensitive request details/);
+			assert.strictEqual(reads, 1);
+			assert.throws(() => store.wait('unknown'), /Unknown/);
+			assert.throws(() => store.start({ ...request, timeoutSeconds: 0 }), /positive timeout/);
+		} finally { store.dispose(); }
+	});
+});
 
 suite('Azure DevOps PRs (MCP) extension', () => {
-	test('advertises pipeline capabilities and agent workflows over MCP stdio before authentication', async function () {
-		this.timeout(15_000);
+	async function verifyPipelineCatalog(experimentalListeners: boolean): Promise<void> {
 		const child = spawn(process.execPath, [join(__dirname, '..', '..', 'dist', 'mcp-server.js')], {
-			env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', AZURE_DEVOPS_ACCESS_TOKEN: 'unused-test-token', AZURE_DEVOPS_ACCESS_TOKEN_URL: undefined },
+			env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', AZURE_DEVOPS_ACCESS_TOKEN: 'unused-test-token', AZURE_DEVOPS_ACCESS_TOKEN_URL: undefined,
+				AZURE_DEVOPS_EXPERIMENTAL_PIPELINE_LISTENERS: String(experimentalListeners) },
 			stdio: ['pipe', 'pipe', 'pipe'],
 		});
 		const exited = new Promise<void>((resolve, reject) => {
@@ -55,6 +403,7 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			assert.strictEqual(initialized.serverInfo.title, 'Azure DevOps PRs and Pipelines');
 			assert.strictEqual(initialized.serverInfo.version, extension?.packageJSON.version);
 			assert.strictEqual(initialized.instructions, mcpServerInstructions);
+			assert.strictEqual(Boolean(initialized.capabilities.tasks?.requests?.tools?.call), experimentalListeners);
 			assert.match(initialized.instructions, /^Azure DevOps PRs and CI Pipelines/);
 			assert.match(initialized.instructions, /expectedRevision from revision and expectedCommitId from commitId/);
 			assert.match(initialized.instructions, /get_pull_request_summary for quiet inspection/);
@@ -65,14 +414,24 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			for (const name of [
 				'list_pipelines', 'get_pipeline', 'list_pipeline_runs', 'get_pipeline_run', 'get_pipeline_run_log',
 				'run_pipeline', 'cancel_pipeline_run', 'update_pipeline', 'get_pipeline_yaml', 'update_pipeline_yaml', 'show_pipeline_run', 'show_pipeline_run_log',
+				'watch_pipeline_run', 'list_pipeline_watches', 'stop_pipeline_watch', 'start_pipeline_watch_probe', 'wait_pipeline_run', 'inspect_pipeline_listener',
+				'list_pipeline_resources', 'get_pipeline_resource_permission', 'set_pipeline_resource_permission',
+				'list_pipeline_approvals', 'get_pipeline_approval', 'update_pipeline_approval',
 			]) {
 				const tool = tools.find((candidate: { name: string }) => candidate.name === name);
 				assert.ok(tool, `${name} must be discoverable`);
 				assert.ok(tool.title, `${name} must have a human-readable title`);
 				assert.ok(initialized.instructions.includes(name), `${name} must be explained in server instructions`);
 			}
+			for (const name of ['wait_pipeline_run', ...(experimentalListeners ? ['wait_pipeline_run_task'] : [])]) {
+				const tool = tools.find((candidate: { name: string }) => candidate.name === name);
+				for (const field of ['watchId', 'organization', 'project', 'runId', 'timeoutSeconds']) {
+					assert.ok(tool.inputSchema.properties?.[field], `${name} must expose ${field} as a top-level input`);
+				}
+			}
+			assert.strictEqual(tools.find((tool: { name: string }) => tool.name === 'wait_pipeline_run_task')?.execution?.taskSupport, experimentalListeners ? 'optional' : undefined);
 			assert.match(tools.find((tool: { name: string }) => tool.name === 'get_workspace_repositories').description, /CI pipelines/);
-			for (const name of ['run_pipeline', 'cancel_pipeline_run', 'update_pipeline', 'update_pipeline_yaml']) {
+			for (const name of ['run_pipeline', 'cancel_pipeline_run', 'update_pipeline', 'update_pipeline_yaml', 'update_pipeline_approval', 'set_pipeline_resource_permission']) {
 				const tool = tools.find((candidate: { name: string }) => candidate.name === name);
 				assert.ok(tool.inputSchema.required.includes('confirm'));
 				assert.strictEqual(tool.inputSchema.properties.confirm.const, true);
@@ -91,6 +450,16 @@ suite('Azure DevOps PRs (MCP) extension', () => {
 			child.kill();
 			await exited;
 		}
+	}
+
+	test('advertises pipeline capabilities and agent workflows over MCP stdio before authentication', async function () {
+		this.timeout(15_000);
+		await verifyPipelineCatalog(false);
+	});
+
+	test('keeps the task experiment behind explicit stdio opt-in', async function () {
+		this.timeout(15_000);
+		await verifyPipelineCatalog(true);
 	});
 
 	test('unblocks a pending token lookup when sign-in succeeds', async () => {

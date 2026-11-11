@@ -4,6 +4,43 @@ All notable changes to the "azure-devops-prs-mcp" extension will be documented i
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.0.93]
+
+- Add project-wide approval discovery, exact approval reads and explicitly confirmed approve/reject decisions using the signed-in user; preserve multi-approver state and refuse changed/non-pending approvals.
+- Add pipeline resource-ID discovery and confirmed per-pipeline resource grants/revocations, with preflight state checks and read-back verification. Never grant all-pipeline access, alter roles/checks, or override inherited authorization.
+- Verify request paths/bodies, confirmation gates, stale state, denial handling, inherited access, revocation and multi-approver behavior through local HTTP contract tests and bundled MCP discovery. No live approvals or resource permissions were changed.
+- Record successful live Azure monitoring of MobileApp unit-test run 141689 on develop: the installed 0.0.92 native listener delivered Succeeded while other feature work continued.
+
+## [0.0.92]
+
+- Promote bounded pipeline watches, direct MCP waits and the native tracked-terminal completion listener to the default feature set; preserve terminal visibility preferences and make host/Stop limitations explicit.
+- Rename prototype inspection to `inspect_pipeline_listener` and reject ambiguous native listener targets before starting monitoring.
+- Disable custom MCP Tasks and runtime companions by default behind `azure-devops-mcp.experimentalPipelineListeners`; ordinary connections use standard MCP stdio. The experimental install command is hidden/guarded, and already-owned companion bootstraps become inert when the opt-in is off.
+- Verify default and experimental catalogs against the bundled server, preserving local simulation, bounded lifetime, cancellation, credential isolation and protocol tests. Runtime companion delivery, Windows execution and live Azure watching remain unverified.
+
+## [0.0.91]
+
+- Correct runtime-extension diagnostics to read the registered `chat.canvases.enabled` setting and report its key without changing host configuration.
+- Record installed macOS simulation evidence: the native wrapper received the host token, launched the tracked terminal in one call, returned control, and delivered completion during active chat. Runtime companion discovery and idle/Stop behavior remain unverified.
+
+## [0.0.90]
+
+- Add a native VS Code language-model tool that can start a bounded watch and invoke the tracked terminal internally using the host-issued invocation token; never accept tokens through MCP arguments.
+- Add MCP host diagnostics and experimental runtime companion routes for native tool execution and client-owned tasks, including local simulations, cancellation, and guarded companion installation/refresh.
+- Keep nested completion, runtime discovery, and automatic client-task continuation explicitly unverified pending installed-host tests after reload.
+
+## [0.0.89]
+
+- Expose MCP wait arguments as top-level object properties so agent hosts can call the direct-wait and native-Tasks prototypes; retain watch-ID or complete-run validation and add bundled discovery coverage.
+
+## [0.0.88]
+
+- Prototype bounded, extension-owned pipeline watches with watch/list/stop MCP tools, silent authentication and a bundled result-waiting CLI.
+- Return a narrow, result-only handoff for an agent's tracked terminal, allowing native process-completion notifications without exposing Azure credentials or cancelling runs.
+- Document window-scoped lifetime and unverified idle/Stop/disconnect behavior; verify controlled watcher, bridge, CLI and active-conversation completion paths.
+- Add one-call direct MCP waits and a protocol-scoped native MCP Tasks experiment with plain-wait fallback, bounded lifetime, status notifications, cancellation and result retrieval.
+- Add a local simulation tool for post-reload comparison without Azure access, and label which delivery approach produced each result.
+
 ## [0.0.87]
 
 - Add pipeline run-status and bounded task-log chat cards using the existing PR card theme, with task timelines, manual refresh, and Azure DevOps links.

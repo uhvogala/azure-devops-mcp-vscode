@@ -16,6 +16,8 @@ import * as z from 'zod/v4';
 import { loadPullRequestReview, reviewerSummary } from './pull-request-review';
 import { registerPipelineTools } from './pipeline-tools';
 import { mcpServerInfo, mcpServerInstructions } from './mcp-guidance';
+import { pipelineWatchCommandSchema } from './pipeline-watch';
+import { PipelineTaskTransport } from './pipeline-task-transport';
 
 const repositorySchema = {
 	organization: z.string().min(1).describe('Azure DevOps organization name.'),
@@ -104,6 +106,18 @@ function requiredEnvironment(name: string, environment = process.env): string {
 		throw new Error(`Missing ${name}. Start this server from the Azure DevOps MCP VS Code extension.`);
 	}
 	return value;
+}
+
+export function createPipelineWatchController(environment = process.env) {
+	return async (command: z.infer<typeof pipelineWatchCommandSchema>): Promise<Record<string, unknown>> => {
+		const response = await fetch(requiredEnvironment('AZURE_DEVOPS_PIPELINE_WATCH_URL', environment), {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${requiredEnvironment('AZURE_DEVOPS_DIFF_COMMAND_TOKEN', environment)}`, 'Content-Type': 'application/json' },
+			body: JSON.stringify(command), signal: AbortSignal.timeout(10_000), redirect: 'error',
+		});
+		if (!response.ok) { throw new Error('Unable to control the local pipeline watch. Check the watch ID, deadline and window watch capacity.'); }
+		return z.record(z.string(), z.unknown()).parse(await response.json());
+	};
 }
 
 export function createTokenProvider(environment = process.env, requestTimeoutMs = 60_000): () => Promise<string> {
@@ -402,6 +416,7 @@ async function invokeExtensionCommand(urlEnvironment: string, arguments_: object
 
 async function main(): Promise<void> {
 	const getAccessToken = createTokenProvider();
+	const experimentalListeners = process.env.AZURE_DEVOPS_EXPERIMENTAL_PIPELINE_LISTENERS === 'true';
 	const server = new McpServer(
 		{ ...mcpServerInfo, version: __AZURE_DEVOPS_MCP_VERSION__ },
 		{
@@ -460,6 +475,8 @@ async function main(): Promise<void> {
 		getBuildApi: async organization => (await getPipelineConnection(organization)).getBuildApi(),
 		getGitApi,
 		getPipelinesApi: async organization => (await getPipelineConnection(organization)).getPipelinesApi(),
+		controlPipelineWatch: createPipelineWatchController(),
+		experimentalListeners,
 	});
 
 	const getWorkItemTrackingApi = async (organization: string) => {
@@ -1190,7 +1207,8 @@ async function main(): Promise<void> {
 		},
 	);
 
-	await server.connect(new StdioServerTransport());
+	const transport = new StdioServerTransport();
+	await server.connect(experimentalListeners ? new PipelineTaskTransport(transport) : transport);
 }
 
 if (require.main === module) {

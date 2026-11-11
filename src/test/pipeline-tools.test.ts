@@ -8,6 +8,12 @@ import { GitVersionType, ItemContentType, VersionControlChangeType } from 'azure
 import { pipelineCardUri, registerPipelineTools } from '../pipeline-tools';
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { AddressInfo } from 'node:net';
+import * as z from 'zod/v4';
+import { pipelineWatchCommandSchema } from '../pipeline-watch';
+import { PipelineTaskTransport } from '../pipeline-task-transport';
+import { PipelineWatchStore } from '../pipeline-watch';
+import { PullRequestCommandBridge, SharedWorkspaceStateStore } from '../extension';
+import { createPipelineWatchController } from '../mcp-server';
 
 const identity = { organization: 'example-org', project: 'example-project' };
 const commitId = 'a'.repeat(40);
@@ -33,17 +39,23 @@ interface TestApis {
 	build?: Partial<IBuildApi>;
 	git?: Partial<IGitApi>;
 	pipelines?: Partial<IPipelinesApi>;
+	controlPipelineWatch?: (command: z.infer<typeof pipelineWatchCommandSchema>) => Promise<Record<string, unknown>>;
+	experimentalListeners?: boolean;
 }
 
 async function withTools(apis: TestApis, testTools: (tools: {
 	call: (name: string, arguments_?: Record<string, unknown>) => Promise<ToolResult>;
-	list: () => Promise<{ tools: { name: string; annotations?: { readOnlyHint?: boolean }; _meta?: { ui?: { resourceUri?: string } } }[] }>;
-}) => Promise<void>): Promise<void> {
+	list: () => Promise<{ tools: { name: string; execution?: { taskSupport: string }; annotations?: { readOnlyHint?: boolean }; _meta?: { ui?: { resourceUri?: string } } }[] }>;
+	request: <Result>(method: string, params?: Record<string, unknown>) => Promise<Result>;
+	initialized: Record<string, unknown>;
+}) => Promise<void>, protocolVersion = LATEST_PROTOCOL_VERSION): Promise<void> {
 	const server = new McpServer({ name: 'pipeline-tests', version: '1.0.0' });
 	registerPipelineTools(server, {
 		getBuildApi: async () => { assert.ok(apis.build, 'Unexpected Build API request'); return apis.build as IBuildApi; },
 		getGitApi: async () => { assert.ok(apis.git, 'Unexpected Git API request'); return apis.git as IGitApi; },
 		getPipelinesApi: async () => { assert.ok(apis.pipelines, 'Unexpected Pipelines API request'); return apis.pipelines as IPipelinesApi; },
+		controlPipelineWatch: apis.controlPipelineWatch,
+		experimentalListeners: apis.experimentalListeners,
 	});
 	const [client, transport] = InMemoryTransport.createLinkedPair();
 	let nextId = 0;
@@ -63,13 +75,14 @@ async function withTools(apis: TestApis, testTools: (tools: {
 		return await response as Result;
 	}
 	try {
-		await server.connect(transport);
+		await server.connect(apis.experimentalListeners ? new PipelineTaskTransport(transport) : transport);
 		await client.start();
-		await request('initialize', { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'tests', version: '1.0.0' } });
+		const initialized = await request<Record<string, unknown>>('initialize', { protocolVersion, capabilities: {}, clientInfo: { name: 'tests', version: '1.0.0' } });
 		await client.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
 		await testTools({
 			call: (name, arguments_ = {}) => request('tools/call', { name, arguments: { ...identity, ...arguments_ } }),
 			list: () => request('tools/list'),
+			request, initialized,
 		});
 	} finally {
 		await server.close();
@@ -88,15 +101,25 @@ function expectError(result: ToolResult, message: RegExp): void {
 	assert.match(JSON.stringify(result.content), message);
 }
 
-async function withBuildHttp(handler: (request: IncomingMessage, response: ServerResponse) => void, testApi: (api: BuildApi) => Promise<void>): Promise<void> {
+async function withLocalWatches(testWatches: (control: NonNullable<TestApis['controlPipelineWatch']>, store: PipelineWatchStore) => Promise<void>): Promise<void> {
+	const store = new PipelineWatchStore(async () => { throw new Error('Simulations must not read Azure'); });
+	const sharedState = new SharedWorkspaceStateStore({ get: <T>(_key: string, value?: T): T => value as T, update: async () => {} });
+	const bridge = new PullRequestCommandBridge(async () => {}, async () => {}, async () => '', async () => ({ repositories: [] }), sharedState,
+		async () => { throw new Error('Simulations must not authenticate'); }, store);
+	try { await testWatches(createPipelineWatchController(await bridge.getServerEnvironment()), store); }
+	finally { bridge.dispose(); sharedState.dispose(); }
+}
+
+async function withBuildHttp(handler: (request: IncomingMessage, response: ServerResponse) => void | Promise<void>, testApi: (api: BuildApi) => Promise<void>): Promise<void> {
 	const errors: unknown[] = [];
+	const fail = (error: unknown, response: ServerResponse) => {
+		errors.push(error);
+		response.statusCode = 500;
+		response.end('Unexpected build API request');
+	};
 	const server = createServer((request, response) => {
-		try { handler(request, response); }
-		catch (error) {
-			errors.push(error);
-			response.statusCode = 500;
-			response.end('Unexpected build API request');
-		}
+		try { void Promise.resolve(handler(request, response)).catch(error => fail(error, response)); }
+		catch (error) { fail(error, response); }
 	});
 	await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
 	const api = new BuildApi(`http://127.0.0.1:${(server.address() as AddressInfo).port}/organization`, []);
@@ -111,15 +134,340 @@ async function withBuildHttp(handler: (request: IncomingMessage, response: Serve
 }
 
 suite('Azure DevOps pipeline tools', () => {
+	test('discovers exact protected resource IDs without returning resource contents', async () => {
+		await withTools({ build: { getDefinitionResources: async (project, pipelineId) => {
+			assert.strictEqual(project, identity.project);
+			assert.strictEqual(pipelineId, 42);
+			return [{ id: 'connection-id', type: 'endpoint', name: 'Deployment connection', authorized: false }];
+		} } }, async tools => {
+			assert.deepStrictEqual(data(await tools.call('list_pipeline_resources', { pipelineId: 42 })).resources,
+				[{ resourceId: 'connection-id', resourceType: 'endpoint', name: 'Deployment connection', authorized: false }]);
+		});
+	});
+
+	test('refuses non-pending approvals even when the version still matches', async () => {
+		const approvalId = 'aab27959-a5be-4ee3-97ca-f19b3602cd2f';
+		await withBuildHttp((request, response) => {
+			assert.strictEqual(request.method, 'GET');
+			response.setHeader('Content-Type', 'application/json');
+			response.end(JSON.stringify({ id: approvalId, status: 'approved', lastModifiedOn: 'unchanged-version' }));
+		}, async build => withTools({ build }, async tools => {
+			expectError(await tools.call('update_pipeline_approval', { approvalId, status: 'rejected', comment: 'Reviewed',
+				expectedLastModifiedOn: 'unchanged-version', confirm: true }), /no longer pending/);
+		}));
+	});
+
+	test('does not retry or bypass Azure permission failures', async () => {
+		let requests = 0;
+		await withBuildHttp((request, response) => {
+			requests++;
+			assert.strictEqual(request.method, 'GET');
+			response.writeHead(403, { 'Content-Type': 'application/json' });
+			response.end(JSON.stringify({ message: 'Permission denied' }));
+		}, async build => withTools({ build }, async tools => {
+			expectError(await tools.call('get_pipeline_approval', { approvalId: 'aab27959-a5be-4ee3-97ca-f19b3602cd2f' }), /Permission denied/);
+			assert.strictEqual(requests, 1);
+		}));
+	});
+
+	test('lists and updates one approval over HTTP without claiming an entire stage is approved', async () => {
+		const approvalId = 'aab27959-a5be-4ee3-97ca-f19b3602cd2f';
+		const modified = '2026-11-11T11:00:00Z';
+		let patches = 0;
+		let submitted = false;
+		await withBuildHttp(async (request, response) => {
+			const url = new URL(request.url!, 'http://localhost');
+			assert.strictEqual(url.searchParams.get('api-version'), '7.1');
+			const approval = { id: approvalId, status: 'pending', lastModifiedOn: submitted ? '2026-11-11T11:01:00Z' : modified,
+				instructions: '<script>untrusted text</script>', steps: submitted ? [{ status: 'approved', comment: 'Reviewed test stage' }] : [], minRequiredApprovers: 2 };
+			response.setHeader('Content-Type', 'application/json');
+			if (request.method === 'PATCH') {
+				assert.strictEqual(url.pathname, '/organization/example-project/_apis/pipelines/approvals');
+				let body = '';
+				for await (const chunk of request) { body += String(chunk); }
+				assert.deepStrictEqual(JSON.parse(body), [{ approvalId, status: 'approved', comment: 'Reviewed test stage' }]);
+				patches++;
+				submitted = true;
+				response.end(JSON.stringify({ value: [approval] }));
+				return;
+			}
+			assert.strictEqual(request.method, 'GET');
+			assert.strictEqual(url.searchParams.get('$expand'), 'steps,permissions');
+			if (url.pathname.endsWith(`/${approvalId}`)) { response.end(JSON.stringify(approval)); return; }
+			assert.strictEqual(url.pathname, '/organization/example-project/_apis/pipelines/approvals');
+			assert.strictEqual(url.searchParams.get('state'), 'pending');
+			assert.strictEqual(url.searchParams.get('approvalIds'), approvalId);
+			assert.strictEqual(url.searchParams.get('userIds'), 'reviewer-id');
+			assert.strictEqual(url.searchParams.get('top'), '1');
+			response.end(JSON.stringify({ value: [approval] }));
+		}, async build => withTools({ build }, async tools => {
+			const listed = data(await tools.call('list_pipeline_approvals', { approvalIds: [approvalId], userIds: ['reviewer-id'], top: 1 }));
+			assert.strictEqual(listed.limitReached, true);
+			const before = data(await tools.call('get_pipeline_approval', { approvalId }));
+			assert.strictEqual(before.instructions, '<script>untrusted text</script>');
+			const target = { approvalId, status: 'approved', comment: 'Reviewed test stage', expectedLastModifiedOn: modified, confirm: true };
+			const updated = data(await tools.call('update_pipeline_approval', target));
+			assert.strictEqual(updated.decisionSubmitted, 'approved');
+			assert.strictEqual(updated.stillPending, true);
+			assert.strictEqual(updated.overallStateReadBack, true);
+			expectError(await tools.call('update_pipeline_approval', target), /changed/);
+			assert.strictEqual(patches, 1);
+		}));
+	});
+
+	test('rejects unconfirmed, reassigned or invalid approval mutations before API access', async () => {
+		await withTools({}, async tools => {
+			const target = { approvalId: 'aab27959-a5be-4ee3-97ca-f19b3602cd2f', status: 'approved', comment: 'Reviewed', expectedLastModifiedOn: '2026-11-11T11:00:00Z' };
+			expectError(await tools.call('update_pipeline_approval', target), /confirm/);
+			expectError(await tools.call('update_pipeline_approval', { ...target, confirm: false }), /confirm/);
+			expectError(await tools.call('update_pipeline_approval', { ...target, confirm: true, reassignTo: { id: 'other' } }), /Unrecognized key/);
+			expectError(await tools.call('update_pipeline_approval', { ...target, confirm: true, status: 'skipped' }), /Invalid option/);
+			expectError(await tools.call('get_pipeline_approval', { approvalId: '42' }), /UUID/);
+		});
+	});
+
+	test('submits a confirmed approval rejection and reads its final state', async () => {
+		const approvalId = 'aab27959-a5be-4ee3-97ca-f19b3602cd2f';
+		let rejected = false;
+		await withBuildHttp(async (request, response) => {
+			response.setHeader('Content-Type', 'application/json');
+			if (request.method === 'PATCH') {
+				let body = '';
+				for await (const chunk of request) { body += String(chunk); }
+				assert.deepStrictEqual(JSON.parse(body), [{ approvalId, status: 'rejected', comment: 'Do not deploy' }]);
+				rejected = true;
+				response.end(JSON.stringify({ value: [{ id: approvalId, status: 'rejected', lastModifiedOn: 'new-version' }] }));
+				return;
+			}
+			assert.strictEqual(request.method, 'GET');
+			response.end(JSON.stringify({ id: approvalId, status: rejected ? 'rejected' : 'pending', lastModifiedOn: rejected ? 'new-version' : 'reviewed-version' }));
+		}, async build => withTools({ build }, async tools => {
+			const result = data(await tools.call('update_pipeline_approval', { approvalId, status: 'rejected', comment: 'Do not deploy',
+				expectedLastModifiedOn: 'reviewed-version', confirm: true }));
+			assert.strictEqual(result.stillPending, false);
+			assert.strictEqual((result.approval as { status: string }).status, 'rejected');
+		}));
+	});
+
+	test('does not retry a denied approval decision or read it back as successful', async () => {
+		const approvalId = 'aab27959-a5be-4ee3-97ca-f19b3602cd2f';
+		let reads = 0;
+		let patches = 0;
+		await withBuildHttp((request, response) => {
+			response.setHeader('Content-Type', 'application/json');
+			if (request.method === 'PATCH') {
+				patches++;
+				response.statusCode = 403;
+				response.end(JSON.stringify({ message: 'Not an approver' }));
+				return;
+			}
+			reads++;
+			response.end(JSON.stringify({ id: approvalId, status: 'pending', lastModifiedOn: 'reviewed-version' }));
+		}, async build => withTools({ build }, async tools => {
+			expectError(await tools.call('update_pipeline_approval', { approvalId, status: 'approved', comment: 'Reviewed',
+				expectedLastModifiedOn: 'reviewed-version', confirm: true }), /Not an approver/);
+			assert.strictEqual(patches, 1);
+			assert.strictEqual(reads, 1);
+		}));
+	});
+
+	test('reads and grants only the confirmed pipeline resource permission over HTTP', async () => {
+		let authorized = false;
+		let patches = 0;
+		await withBuildHttp(async (request, response) => {
+			const url = new URL(request.url!, 'http://localhost');
+			assert.strictEqual(url.pathname, '/organization/example-project/_apis/pipelines/pipelinepermissions/repository/project%2Frepo');
+			assert.strictEqual(url.searchParams.get('api-version'), '7.1-preview.1');
+			if (request.method === 'PATCH') {
+				patches++;
+				let body = '';
+				for await (const chunk of request) { body += String(chunk); }
+				assert.deepStrictEqual(JSON.parse(body), { pipelines: [{ id: 42, authorized: true }] });
+				authorized = true;
+				response.setHeader('Content-Type', 'application/json');
+				response.end('{}');
+				return;
+			}
+			assert.strictEqual(request.method, 'GET');
+			response.setHeader('Content-Type', 'application/json');
+			response.end(JSON.stringify({ resource: { id: 'project/repo', type: 'repository' },
+				allPipelines: { authorized: false }, pipelines: [{ id: 42, authorized }, { id: 99, authorized: true }] }));
+		}, async build => withTools({ build }, async tools => {
+			const target = { pipelineId: 42, resourceType: 'repository', resourceId: 'project/repo' };
+			assert.strictEqual(data(await tools.call('get_pipeline_resource_permission', target)).authorized, false);
+			const result = data(await tools.call('set_pipeline_resource_permission', { ...target, authorized: true, expectedAuthorized: false, confirm: true }));
+			assert.strictEqual(result.authorized, true);
+			assert.strictEqual(result.verified, true);
+			assert.strictEqual(patches, 1);
+			expectError(await tools.call('set_pipeline_resource_permission', { ...target, authorized: false, expectedAuthorized: false, confirm: true }), /changed/);
+			assert.strictEqual(patches, 1);
+		}));
+	});
+
+	test('revokes one resource permission without revoking other pipelines', async () => {
+		let authorized = true;
+		await withBuildHttp(async (request, response) => {
+			response.setHeader('Content-Type', 'application/json');
+			if (request.method === 'PATCH') {
+				let body = '';
+				for await (const chunk of request) { body += String(chunk); }
+				assert.deepStrictEqual(JSON.parse(body), { pipelines: [{ id: 42, authorized: false }] });
+				authorized = false;
+				response.end('{}');
+				return;
+			}
+			assert.strictEqual(request.method, 'GET');
+			response.end(JSON.stringify({ resource: { id: 'connection-id', type: 'endpoint' },
+				pipelines: [{ id: 42, authorized }, { id: 99, authorized: true }] }));
+		}, async build => withTools({ build }, async tools => {
+			const result = data(await tools.call('set_pipeline_resource_permission', { pipelineId: 42, resourceType: 'endpoint', resourceId: 'connection-id',
+				authorized: false, expectedAuthorized: true, confirm: true }));
+			assert.strictEqual(result.authorized, false);
+			assert.strictEqual(result.verified, true);
+		}));
+	});
+
+	test('reports inherited resource access without changing all-pipeline policy', async () => {
+		await withBuildHttp((request, response) => {
+			assert.strictEqual(request.method, 'GET');
+			response.setHeader('Content-Type', 'application/json');
+			response.end(JSON.stringify({ resource: { id: '1', type: 'queue' }, allPipelines: { authorized: true }, pipelines: [] }));
+		}, async build => withTools({ build }, async tools => {
+			const target = { pipelineId: 42, resourceType: 'queue', resourceId: '1' };
+			assert.strictEqual(data(await tools.call('get_pipeline_resource_permission', target)).inheritedFromAllPipelines, true);
+			expectError(await tools.call('set_pipeline_resource_permission', { ...target, authorized: false, expectedAuthorized: true, confirm: true }), /broader policy/);
+			assert.strictEqual(data(await tools.call('set_pipeline_resource_permission', { ...target, authorized: true, expectedAuthorized: true, confirm: true })).changed, false);
+		}));
+	});
+
+	test('reports permission read-back failure without replaying the mutation', async () => {
+		let patches = 0;
+		await withBuildHttp((request, response) => {
+			response.setHeader('Content-Type', 'application/json');
+			if (request.method === 'PATCH') { patches++; response.end('{}'); return; }
+			response.end(JSON.stringify({ resource: { id: '1', type: 'queue' }, pipelines: [] }));
+		}, async build => withTools({ build }, async tools => {
+			expectError(await tools.call('set_pipeline_resource_permission', { pipelineId: 42, resourceType: 'queue', resourceId: '1',
+				authorized: true, expectedAuthorized: false, confirm: true }), /read-back did not confirm/);
+			assert.strictEqual(patches, 1);
+		}));
+	});
+
+	test('refuses unconfirmed resource changes and broad authorization before API access', async () => {
+		await withTools({}, async tools => {
+			const target = { pipelineId: 42, resourceType: 'endpoint', resourceId: 'connection-id', authorized: true, expectedAuthorized: false };
+			expectError(await tools.call('set_pipeline_resource_permission', target), /confirm/);
+			expectError(await tools.call('set_pipeline_resource_permission', { ...target, confirm: false }), /confirm/);
+			expectError(await tools.call('set_pipeline_resource_permission', { ...target, confirm: true, allPipelines: true }), /Unrecognized key/);
+			expectError(await tools.call('get_pipeline_resource_permission', { pipelineId: 42, resourceType: 'endpoint', resourceId: '..' }), /Invalid input/);
+		});
+	});
+
+	test('inspects native listener capabilities through the real bridge without accepting a forged chat token', async () => {
+		await withLocalWatches(async control => withTools({ controlPipelineWatch: control }, async tools => {
+			const inspected = data(await tools.request<ToolResult>('tools/call', { name: 'inspect_pipeline_listener', arguments: {} }));
+			assert.strictEqual(inspected.mcpCanSupplyToolInvocationToken, false);
+			assert.strictEqual(inspected.nativeToolName, 'azure_devops_pipeline_listener');
+			assert.ok(Array.isArray(inspected.terminalTools));
+			expectError(await tools.request<ToolResult>('tools/call', { name: 'inspect_pipeline_listener', arguments: { toolInvocationToken: 'forged' } }), /Unrecognized key/);
+		}));
+	});
+
+	test('waits directly and falls back without Tasks on older protocols, including simulated failures', async function () {
+		this.timeout(5000);
+		await withLocalWatches(async control => withTools({ controlPipelineWatch: control, experimentalListeners: true }, async tools => {
+			assert.strictEqual((tools.initialized.capabilities as Record<string, unknown>).tasks, undefined);
+			assert.strictEqual((await tools.list()).tools.find(tool => tool.name === 'wait_pipeline_run_task')?.execution, undefined);
+			const probe = data(await tools.call('start_pipeline_watch_probe', { delaySeconds: 1, timeoutSeconds: 5, result: 'Failed' }));
+			assert.strictEqual(probe.simulation, true);
+			const watchId = (probe.watch as { watchId: string }).watchId;
+			const direct = data(await tools.call('wait_pipeline_run', { watchId }));
+			assert.strictEqual(direct.approach, 'direct-mcp');
+			assert.strictEqual((direct.watch as { result: string }).result, 'Failed');
+			assert.strictEqual(data(await tools.call('wait_pipeline_run_task', { watchId })).approach, 'mcp-task-fallback');
+			expectError(await tools.call('start_pipeline_watch_probe', { delaySeconds: 121 }), /120/);
+		}, '2025-06-18'));
+	});
+
+	test('negotiates native Tasks only on 2025-11-25 and retrieves the deferred watch result', async function () {
+		this.timeout(5000);
+		await withLocalWatches(async control => withTools({ controlPipelineWatch: control, experimentalListeners: true }, async tools => {
+			assert.ok((tools.initialized.capabilities as Record<string, unknown>).tasks);
+			const registered = (await tools.list()).tools;
+			assert.deepStrictEqual(registered.find(tool => tool.name === 'wait_pipeline_run_task')?.execution, { taskSupport: 'optional' });
+			assert.strictEqual(registered.find(tool => tool.name === 'wait_pipeline_run')?.execution, undefined);
+			const probe = data(await tools.call('start_pipeline_watch_probe', { delaySeconds: 1, timeoutSeconds: 5 }));
+			const watchId = (probe.watch as { watchId: string }).watchId;
+			const created = await tools.request<{ task: { taskId: string; status: string } }>('tools/call', {
+				name: 'wait_pipeline_run_task', arguments: { watchId }, task: {},
+			});
+			assert.strictEqual(created.task.status, 'working');
+			assert.strictEqual((await tools.request<{ tasks: unknown[] }>('tasks/list')).tasks.length, 1);
+			const result = data(await tools.request<ToolResult>('tasks/result', { taskId: created.task.taskId }));
+			assert.strictEqual(result.approach, 'mcp-task');
+			assert.strictEqual((result.watch as { result: string }).result, 'Succeeded');
+			assert.strictEqual((await tools.request<{ status: string }>('tasks/get', { taskId: created.task.taskId })).status, 'completed');
+			await assert.rejects(tools.request('tasks/cancel', { taskId: created.task.taskId }), /terminal/);
+			await assert.rejects(tools.request('tools/call', { name: 'list_pipeline_watches', arguments: {}, task: {} }), /Only wait_pipeline_run_task/);
+		}, '2025-11-25'));
+	});
+
+	test('cancels a native task waiter without cancelling its bounded watch', async () => {
+		await withLocalWatches(async (control, store) => withTools({ controlPipelineWatch: control, experimentalListeners: true }, async tools => {
+			const handoff = await control({ action: 'probe', request: { delaySeconds: 5, timeoutSeconds: 10, result: 'Succeeded' } });
+			const watchId = (handoff.watch as { watchId: string }).watchId;
+			const created = await tools.request<{ task: { taskId: string } }>('tools/call', { name: 'wait_pipeline_run_task', arguments: { watchId }, task: {} });
+			const result = tools.request('tasks/result', { taskId: created.task.taskId });
+			const rejected = assert.rejects(result, /wait cancelled/);
+			assert.strictEqual((await tools.request<{ status: string }>('tasks/cancel', { taskId: created.task.taskId })).status, 'cancelled');
+			await rejected;
+			assert.strictEqual(store.get(watchId).state, 'watching');
+			await control({ action: 'stop', watchId });
+		}, '2025-11-25'));
+	});
+
+	test('expires pending native task results and leaves no retrievable task behind', async function () {
+		this.timeout(5000);
+		await withLocalWatches(async (control, store) => withTools({ controlPipelineWatch: control, experimentalListeners: true }, async tools => {
+			const handoff = await control({ action: 'probe', request: { delaySeconds: 5, timeoutSeconds: 10, result: 'Succeeded' } });
+			const watchId = (handoff.watch as { watchId: string }).watchId;
+			const created = await tools.request<{ task: { taskId: string } }>('tools/call', { name: 'wait_pipeline_run_task', arguments: { watchId }, task: { ttl: 1000 } });
+			await assert.rejects(tools.request('tasks/result', { taskId: created.task.taskId }), /expired/);
+			await assert.rejects(tools.request('tasks/get', { taskId: created.task.taskId }), /Unknown/);
+			assert.strictEqual(store.get(watchId).state, 'watching');
+			await control({ action: 'stop', watchId });
+		}, '2025-11-25'));
+	});
+
 	test('registers discovery, monitoring, execution and editing tools with read-only hints', async () => {
 		await withTools({}, async tools => {
+			assert.strictEqual((tools.initialized.capabilities as Record<string, unknown>).tasks, undefined);
 			const { tools: registered } = await tools.list();
 			assert.deepStrictEqual(registered.map(tool => tool.name).sort(), [
-				'cancel_pipeline_run', 'get_pipeline', 'get_pipeline_run', 'get_pipeline_run_log', 'get_pipeline_yaml',
-				'list_pipeline_runs', 'list_pipelines', 'run_pipeline', 'show_pipeline_run', 'show_pipeline_run_log', 'update_pipeline', 'update_pipeline_yaml',
+				'cancel_pipeline_run', 'get_pipeline', 'get_pipeline_approval', 'get_pipeline_resource_permission', 'get_pipeline_run', 'get_pipeline_run_log', 'get_pipeline_yaml',
+				'inspect_pipeline_listener', 'list_pipeline_approvals', 'list_pipeline_resources', 'list_pipeline_runs', 'list_pipeline_watches', 'list_pipelines', 'run_pipeline', 'set_pipeline_resource_permission', 'show_pipeline_run', 'show_pipeline_run_log', 'start_pipeline_watch_probe', 'stop_pipeline_watch', 'update_pipeline', 'update_pipeline_approval', 'update_pipeline_yaml', 'wait_pipeline_run', 'watch_pipeline_run',
 			]);
 			assert.strictEqual(registered.find(tool => tool.name === 'get_pipeline_run')?.annotations?.readOnlyHint, true);
 			assert.strictEqual(registered.find(tool => tool.name === 'run_pipeline')?.annotations?.readOnlyHint, false);
+		});
+	});
+
+	test('hands bounded pipeline watches to the extension without requesting remote mutation APIs', async () => {
+		const commands: z.infer<typeof pipelineWatchCommandSchema>[] = [];
+		const watchId = 'a'.repeat(64);
+		await withTools({ controlPipelineWatch: async command => {
+			commands.push(command);
+			return command.action === 'list' ? { watches: [] } : { watch: { watchId }, wait: { command: 'node pipeline-wait.js' } };
+		} }, async tools => {
+			assert.match(String(data(await tools.call('watch_pipeline_run', { runId: 100, timeoutSeconds: 30 })).nextStep), /tracked shell/);
+			expectError(await tools.call('watch_pipeline_run', { runId: 100, timeoutSeconds: 7201 }), /7200/);
+			expectError(await tools.call('watch_pipeline_run', { runId: 100 }), /timeoutSeconds/);
+			assert.deepStrictEqual(data(await tools.call('list_pipeline_watches')).watches, []);
+			await tools.call('stop_pipeline_watch', { watchId });
+			assert.deepStrictEqual(commands, [
+				{ action: 'start', request: { ...identity, runId: 100, timeoutSeconds: 30 } },
+				{ action: 'list' }, { action: 'stop', watchId },
+			]);
 		});
 	});
 

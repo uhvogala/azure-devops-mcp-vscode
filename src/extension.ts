@@ -14,6 +14,9 @@ import { randomBytes } from 'node:crypto';
 import { AzureDevOpsAuthentication } from './authentication';
 import { loadPullRequestReview } from './pull-request-review';
 import { mcpServerLabel } from './mcp-guidance';
+import { join } from 'node:path';
+import { PipelineWatchStore, pipelineWatchCommandSchema } from './pipeline-watch';
+import { experimentalPipelineListenersEnabled, inspectPipelineListenerHost, registerPipelineListenerTool } from './pipeline-listener-tools';
 
 const providerId = 'azure-devops-mcp.pull-requests';
 const pullRequestContentScheme = 'azure-devops-pr';
@@ -478,6 +481,7 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 	private readonly token = randomBytes(32).toString('hex');
 	private server: Server | undefined;
 	private startPromise: Promise<number> | undefined;
+	private readonly pipelineWatches: PipelineWatchStore;
 
 	public constructor(
 		private readonly openDiff: (arguments_: OpenPullRequestFileDiffArguments) => Promise<void>,
@@ -486,7 +490,16 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 		private readonly getWorkspaceRepositoryContext: () => Promise<WorkspaceRepositoryContext>,
 		private readonly sharedState: SharedWorkspaceStateStore,
 		private readonly getAccessToken: (interactive: boolean) => Promise<string>,
+		pipelineWatches?: PipelineWatchStore,
 	) {
+		this.pipelineWatches = pipelineWatches ?? new PipelineWatchStore(async request => {
+			const connection = new azureDevOps.WebApi(
+				`https://dev.azure.com/${encodeURIComponent(request.organization)}`,
+				azureDevOps.getBearerHandler(await this.getAccessToken(false)),
+				{ socketTimeout: 20_000 },
+			);
+			return (await connection.getBuildApi()).getBuild(request.project, request.runId);
+		});
 	}
 
 	public async getServerEnvironment(): Promise<Record<string, string>> {
@@ -498,12 +511,30 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 			AZURE_DEVOPS_SHARED_STATE_URL: `http://127.0.0.1:${port}/shared-state`,
 			AZURE_DEVOPS_WORKSPACE_CONTEXT_URL: `http://127.0.0.1:${port}/workspace-repositories`,
 			AZURE_DEVOPS_ACCESS_TOKEN_URL: `http://127.0.0.1:${port}/access-token`,
+			AZURE_DEVOPS_PIPELINE_WATCH_URL: `http://127.0.0.1:${port}/pipeline-watch`,
 			AZURE_DEVOPS_DIFF_COMMAND_TOKEN: this.token,
 		};
 	}
 
 	public dispose(): void {
+		this.pipelineWatches.dispose();
 		this.server?.close();
+	}
+
+	public async controlPipelineWatch(input: unknown): Promise<Record<string, unknown>> {
+		const command = pipelineWatchCommandSchema.parse(input);
+		if (command.action === 'inspect') { return inspectPipelineListenerHost(); }
+		const watch = command.action === 'start' ? this.pipelineWatches.start(command.request)
+			: command.action === 'probe' ? this.pipelineWatches.startProbe(command.request)
+			: command.action === 'get' ? this.pipelineWatches.get(command.watchId)
+			: command.action === 'stop' ? this.pipelineWatches.stop(command.watchId) : undefined;
+		if (!watch) { return { watches: this.pipelineWatches.list() }; }
+		if (command.action === 'stop') { return { watch }; }
+		const port = await this.start();
+		const args = [join(__dirname, 'pipeline-wait.js'), '--url', `http://127.0.0.1:${port}/pipeline-watch-result/${watch.watchId}`,
+			'--timeout-seconds', String(Math.max(1, Math.ceil((Date.parse(watch.expiresAt) - Date.now()) / 1000)) + 5)];
+		const quote = (value: string) => `'${value.replace(/'/g, process.platform === 'win32' ? "''" : "'\\''")}'`;
+		return { watch, wait: { executable: 'node', args, command: `${process.platform === 'win32' ? '& ' : ''}${['node', ...args].map(quote).join(' ')}` } };
 	}
 
 	private start(): Promise<number> {
@@ -526,6 +557,17 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 	}
 
 	private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+		const watchResult = /^\/pipeline-watch-result\/([a-f0-9]{64})$/.exec(request.url ?? '');
+		if (request.method === 'GET' && watchResult) {
+			try {
+				const snapshot = await this.pipelineWatches.wait(watchResult[1]!);
+				response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
+					.end(JSON.stringify(snapshot));
+			} catch {
+				response.writeHead(404).end();
+			}
+			return;
+		}
 		if (request.method !== 'POST' || request.headers.authorization !== `Bearer ${this.token}`) {
 			response.writeHead(404).end();
 			return;
@@ -537,6 +579,18 @@ export class PullRequestCommandBridge implements vscode.Disposable {
 				chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
 			}
 			const arguments_: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+			if (request.url === '/pipeline-watch') {
+				const parsed = pipelineWatchCommandSchema.safeParse(arguments_);
+				if (!parsed.success) { response.writeHead(400).end(); return; }
+				try {
+					const result = await this.controlPipelineWatch(parsed.data);
+					response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
+						.end(JSON.stringify(result));
+				} catch {
+					response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Unknown watch or watch capacity exceeded.');
+				}
+				return;
+			}
 			if (request.url === '/open-pull-request-file-diff' && isOpenPullRequestFileDiffArguments(arguments_)) {
 				await this.openDiff(arguments_);
 				response.writeHead(204).end();
@@ -1237,6 +1291,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		sharedState,
 		interactive => authentication.getAccessToken(interactive),
 	);
+	registerPipelineListenerTool(context, input => commandBridge.controlPipelineWatch(input));
 	context.subscriptions.push(sharedState.onDidChange(change => {
 		void reviewWebview?.webview.postMessage({ type: 'sharedStateChanged', change });
 		if (change.key === pullRequestDraftIndexKey) {
@@ -1377,7 +1432,10 @@ export function activate(context: vscode.ExtensionContext): void {
 					return undefined;
 				}
 
-				server.env = await commandBridge.getServerEnvironment();
+				server.env = {
+					...await commandBridge.getServerEnvironment(),
+					AZURE_DEVOPS_EXPERIMENTAL_PIPELINE_LISTENERS: String(experimentalPipelineListenersEnabled()),
+				};
 				return server;
 			},
 		}),
